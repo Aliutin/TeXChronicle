@@ -12,9 +12,9 @@
 **English** · [简体中文](docs/i18n/README.zh-CN.md) · [日本語](docs/i18n/README.ja.md) · [한국어](docs/i18n/README.ko.md) · [Español](docs/i18n/README.es.md) · [Français](docs/i18n/README.fr.md) · [Deutsch](docs/i18n/README.de.md) · [Português](docs/i18n/README.pt.md)
 
 **MagicTeX** is a **LaTeX editor built for AI agents** — an Overleaf-like
-one-window workspace for Claude Code, served by an MCP server, with **no local TeX
-install and no Overleaf account**: live PDF preview, a source editor with a Visual
-(WYSIWYG) mode, change history, and **comments you anchor on the rendered PDF that
+one-window workspace for people and MCP-compatible AI agents, with **no local TeX
+install and no Overleaf account**: source editing, a source-preserving **Live visual editor**,
+exact live PDF, change history, and **comments you anchor on the rendered PDF that
 become edit instructions for the agent**. (npm package: `magictex-mcp`.)
 
 It compiles with a WASM TeX Live 2026 engine ([texlyre-busytex](https://github.com/TeXlyre/texlyre-busytex))
@@ -58,9 +58,13 @@ anchored annotations):
   [`docs/AGENT-LOOP.md`](docs/AGENT-LOOP.md).
 - **Editable source panel.** A CodeMirror LaTeX editor with the project's files —
   save (Ctrl+S) recompiles and refreshes the PDF, Typst-style. Or keep using your
-  own editor: any save triggers the same live loop. **Code**, **Visual**, and
-  **PDF** are full-canvas selectable workspaces; **Split** keeps source and PDF
-  side by side when comparison is more useful than space.
+  own editor: any save triggers the same live loop. **Code**, **Live**, and
+  **PDF** are full-canvas selectable workspaces. Live turns ordinary academic
+  LaTeX into an editable document immediately (headings, prose, citations, footnotes,
+  lists, equations, figures, and tables). Editing a word changes only its exact source
+  span; math, citations, references, commands, comments, and untouched formatting remain
+  byte-for-byte intact. Protected constructs stay visible and open in Code; PDF remains exact.
+  **Split** keeps source or Live beside PDF when comparison is useful.
 - **PDF → exact source.** Click a point in a PDF produced by the local TeX backend
   to open the corresponding source file and line via SyncTeX. Visible-text
   refinement handles macro-expanded title/author blocks, and remains a best-effort
@@ -381,7 +385,7 @@ Please keep both green and add coverage with changes.
 
 ## Documentation
 
-- [**User guide**](docs/USER-GUIDE.md) — everyday use, the comment loop, Visual mode, the
+- [**User guide**](docs/USER-GUIDE.md) — everyday use, the comment loop, Live editing, the
   file tree, getting your paper into Overleaf, package coverage.
 - [**The agent loop**](docs/AGENT-LOOP.md) — comments as triggers, running it hands-off with
   `/loop`, the reviewer → gate → resolver workflow, and ⚡ `/ultra-agents`.

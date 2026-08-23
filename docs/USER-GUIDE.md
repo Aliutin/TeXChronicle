@@ -8,8 +8,8 @@
 
 1. Add the server to your paper project's `.mcp.json` (see the README), restart Claude Code.
    Or install the plugin for slash commands (below).
-2. Ask Claude to *"render a preview"* (or run `/magic-latex`). The **workspace** opens: a
-   top-level view switch gives **Code**, an editable **Visual** rendering, the exact compiled
+2. Ask your connected agent to *"render a preview"* (or run `/magic-latex`). The **workspace** opens: a
+   top-level view switch gives **Code**, a source-preserving **Live visual editor**, the exact compiled
    **PDF**, and **Split** for source + PDF together. **History** is beside them; toggle
    💬 **Comments** in the top bar whenever you need the review drawer.
 3. From then on the PDF stays live. Your own editor's saves and Claude's edits auto-recompile;
@@ -95,13 +95,28 @@ quoted head and tail phrases) rather than pinning it to old coordinates — so i
 even when the words in the middle changed. If a passage is deleted or rewritten past recognition,
 the highlight falls back to its last known position.
 
-## Visual (WYSIWYG) mode
+## Live visual editor
 
-In the editor bar, toggle **Code / Visual**. Visual mode renders the document in place —
-`\section`/`\textbf`/`\emph`, `$…$` and `\begin{equation}` math (via KaTeX), lists, `\cite` chips,
-links — while dimming the preamble. Click any element to reveal its raw LaTeX and edit it. It's a
-decoration layer over the same file, so it never changes your source. **⏎ Wrap** wraps long lines
-(for LaTeX written without line breaks).
+Choose **Live** at the top to edit the current source as a document rather than as code. Click ordinary
+prose—including headings, emphasized text, list items, captions, table cells, and footnotes—and type
+directly. Enter creates a new paragraph. The change is projected back onto the smallest exact source
+span, so untouched whitespace and typography are not regenerated and surrounding citations, math,
+references, macro names, braces, and comments remain intact.
+
+Rendered math, citations, references, and other protected constructs remain visible but are not
+flattened into text. Use the paper-margin line number or **Edit Code** when you need to change their
+exact LaTeX. The Code editor stays mounted behind Live, preserving the current buffer and history.
+Ordinary `\input`/`\include` files are rendered with file-and-line mappings; clicking editable text
+from another file first binds the editor to that file, then the second click edits it safely.
+
+Live updates without running TeX and renders titles, numbered headings, paragraphs, emphasis,
+citations and references, footnotes, lists, KaTeX equations, figures, and ordinary tables. Unknown
+project macros are approximated locally instead of blanking the whole document, and the status bar
+lists how many constructs were approximated.
+
+Live is a semantic editor, not a second TeX engine. Use **PDF** for authoritative
+pagination, fonts, floating placement, complex tables, TikZ, and final visual review. **⏎ Wrap** in
+Code wraps long source lines without changing the file.
 
 ## The file tree
 

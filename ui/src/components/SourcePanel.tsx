@@ -14,14 +14,30 @@ import { EditorSelection, Prec } from '@codemirror/state';
 import { undo, redo } from '@codemirror/commands';
 import { latex } from 'codemirror-lang-latex';
 import { findSourceLine, phrase, stripLatex } from '../sync';
-import { visualMode } from '../visual';
 import { FileTree } from './FileTree';
+import { LivePreview, type LiveSourceEdit } from './LivePreview';
 import { saveFile, type Status } from '../api';
 
 const LIVE_DEBOUNCE_MS = 1200; // Live mode: recompile this long after you stop typing
 const AUTOSAVE_MS = 30000;      // safety net: persist edits (no recompile) every 30s
 interface SyncTarget { text: string; nonce: number; file?: string; line?: number; column?: number }
 export type SourceMode = 'code' | 'visual';
+
+function sourceOffsetAt(text: string, position: { line: number; column: number }): number | null {
+  if (position.line < 1 || position.column < 0) return null;
+  let line = 1;
+  let start = 0;
+  while (line < position.line) {
+    const newline = text.indexOf('\n', start);
+    if (newline < 0) return null;
+    start = newline + 1;
+    line++;
+  }
+  const newline = text.indexOf('\n', start);
+  let end = newline < 0 ? text.length : newline;
+  if (end > start && text[end - 1] === '\r') end--;
+  return position.column <= end - start ? start + position.column : null;
+}
 
 export function SourcePanel({
   reloadTick, syncTarget, onSyncToPdf, dead = false, liveStatus, compileSeq = 0,
@@ -30,11 +46,11 @@ export function SourcePanel({
   reloadTick: number;
   syncTarget?: SyncTarget | null;
   onSyncToPdf?: (text: string) => void;
-  /** Controlled editor presentation used by the global Code / Visual views. */
+  /** Controlled presentation used by the global Code / Live views. */
   mode?: SourceMode;
   /** In a focused source workspace the file tree becomes a left sidebar. */
   wide?: boolean;
-  /** Split view keeps the compact local Code / Visual switch. */
+  /** Split view keeps the compact local Code / Live switch. */
   showModeToggle?: boolean;
   onModeChange?: (mode: SourceMode) => void;
   /** Main document name reported by the compiler; preferred over alphabetic file 1. */
@@ -95,7 +111,6 @@ export function SourcePanel({
   const parked = useRef<Map<string, string>>(new Map());
   const [dirtyPaths, setDirtyPaths] = useState<Set<string>>(new Set());
   const pendingJump = useRef<{ path: string; line: number } | null>(null);
-  const visualTransition = useRef(false);
   // File reads can finish out of order (especially when a PDF click changes the
   // target twice quickly). Only the newest navigation is allowed to replace the
   // editor buffer.
@@ -301,6 +316,9 @@ export function SourcePanel({
   }, [liveStatus, saveState, compileSeq]);
 
   const onChange = useCallback((v: string) => {
+    // Keep the imperative ref current inside the same input event. Visual text
+    // leaves can commit again before React paints the previous source update.
+    contentRef.current = v;
     setContent(v);
     setDirty(true);
     // Live mode recompiles a short while after you stop typing (Typst-style).
@@ -309,6 +327,30 @@ export function SourcePanel({
       autoTimer.current = setTimeout(() => { void save(true); }, LIVE_DEBOUNCE_MS);
     }
   }, [save]);
+
+  const applyLiveTextEdit = useCallback((edit: LiveSourceEdit): boolean => {
+    const path = activeRef.current;
+    if (!path) return false;
+    if (edit.file !== path) {
+      // Included files are editable too, but first bind the hidden CodeMirror
+      // buffer to that file so undo, dirty tracking, and autosave keep one clear
+      // owner. The Live view remains open after navigation.
+      void openFile(edit.file);
+      setLoadError(`Opened ${edit.file}. Click the text again to edit it safely.`);
+      return false;
+    }
+
+    const current = contentRef.current;
+    const from = sourceOffsetAt(current, edit.from);
+    const to = sourceOffsetAt(current, edit.to);
+    if (from === null || to === null || to < from) return false;
+    const existing = current.slice(from, to);
+    if (existing.replace(/\r\n/g, '\n') !== edit.expected.replace(/\r\n/g, '\n')) return false;
+
+    setLoadError(null);
+    onChange(current.slice(0, from) + edit.insert + current.slice(to));
+    return true;
+  }, [onChange, openFile]);
 
   // Safety-net auto-save every 30s when not in Live mode: persist edits to disk
   // WITHOUT recompiling, so you don't lose work but the PDF only rebuilds on demand.
@@ -344,24 +386,6 @@ export function SourcePanel({
       if (activeRef.current === pending.path) jumpToLine(pending.line);
     });
   }, [active, content, jumpToLine]);
-
-  // A full Visual workspace that opens on eighty dim package declarations
-  // looks broken, even though the rendered body is farther down. On entry only,
-  // if the cursor is still at the very start, land on the title/body. Preserve
-  // the user's position for every ordinary Code ↔ Visual switch after that.
-  useEffect(() => {
-    if (!visual) { visualTransition.current = false; return; }
-    if (visualTransition.current || !active || !content) return;
-    const view = cmRef.current?.view;
-    if (!view) return;
-    visualTransition.current = true;
-    if (view.state.doc.lineAt(view.state.selection.main.head).number > 3) return;
-    const lines = content.split(/\r?\n/);
-    const title = lines.findIndex((line) => /\\title\s*(?:\[|\{)/.test(line));
-    const begin = lines.findIndex((line) => /\\begin\s*\{document\}/.test(line));
-    const target = title >= 0 ? title : begin >= 0 ? begin + 1 : 0;
-    requestAnimationFrame(() => jumpToLine(target));
-  }, [visual, active, content, jumpToLine]);
 
   // PDF → source: prefer the genuine SyncTeX file+line. Visible prose refines
   // nearby macro-expanded material (all of \maketitle may map to one invocation)
@@ -450,11 +474,29 @@ export function SourcePanel({
       latex(),
       Prec.high(keymap.of([{ key: 'Mod-s', run: () => { void save(true); return true; } }])),
       ...(wrap ? [EditorView.lineWrapping] : []),
-      ...(visual ? [visualMode()] : []),
     ],
-    [save, visual, wrap],
+    [save, wrap],
   );
   useEffect(() => { localStorage.setItem('ws-wrap', wrap ? '1' : '0'); }, [wrap]);
+
+  const saveStateText = saveState === 'saving' ? 'saving…'
+    : saveState === 'compiling' ? '✓ saved — recompiling'
+      : saveState === 'saved' ? '✓ saved'
+        : saveState === 'compile-failed' ? '✓ saved — ⚠ compile failed'
+          : saveState === 'error' ? '⚠ NOT saved' : '';
+
+  const editFromPreview = useCallback((line?: number, file?: string) => {
+    chooseVisual(false);
+    if (line === undefined) return;
+    if (file && file !== activeRef.current) {
+      pendingJump.current = { path: file, line: Math.max(0, line - 1) };
+      void openFile(file);
+      return;
+    }
+    // Keep CodeMirror mounted behind the preview, so its undo history and the
+    // exact unsaved buffer survive. Reveal it, then focus the requested line.
+    requestAnimationFrame(() => jumpToLine(Math.max(0, line - 1)));
+  }, [chooseVisual, jumpToLine, openFile]);
 
   return (
     <div className={`source ${wide ? 'source-wide' : ''}`}>
@@ -496,65 +538,84 @@ export function SourcePanel({
         {loadError && <div className="panel-hint load-error">{loadError}</div>}
         {active ? (
           <>
-          <div className="editor-bar">
-            <span className="editor-file">{active}{dirty ? ' •' : ''}</span>
-            {showModeToggle && (
-              <span className="seg" title="Code shows raw LaTeX; Visual renders headings, bold, italic in place">
-                <button className={visual ? '' : 'on'} onClick={() => chooseVisual(false)}>Code</button>
-                <button className={visual ? 'on' : ''} onClick={() => chooseVisual(true)}>Visual</button>
-              </span>
+            {visual && (
+              <div className="live-source-pane">
+                <div className="editor-bar live-editor-bar">
+                  <span className="editor-file">{active}{dirty ? ' • unsaved' : ''}</span>
+                  <span className="spacer" />
+                  <span className={`save-state save-${saveState}`} title={saveError ?? undefined}>{saveStateText}</span>
+                  <span className="live-edit-hint">Click prose to edit</span>
+                  <button onClick={() => editFromPreview()} title="Edit exact LaTeX commands and protected constructs">Edit Code</button>
+                  <button onClick={() => void save(true)} disabled={!dirty && saveState !== 'error'} title="Save source and compile the exact PDF">Save &amp; compile</button>
+                </div>
+                <LivePreview
+                  source={content}
+                  file={active}
+                  refreshKey={reloadTick}
+                  onEdit={editFromPreview}
+                  onTextEdit={applyLiveTextEdit}
+                />
+              </div>
             )}
-            <span className="spacer" />
-            {/* "save failed" beside a working-looking editor understated it: the
-                text is not on disk. The reason goes in the tooltip, since when
-                the server has stopped the reason is the only actionable part. */}
-            <span className={`save-state save-${saveState}`} title={saveError ?? undefined}>
-              {saveState === 'saving' ? 'saving…' : saveState === 'compiling' ? '✓ saved — recompiling' : saveState === 'saved' ? '✓ saved' : saveState === 'compile-failed' ? '✓ saved — ⚠ compile failed' : saveState === 'error' ? '⚠ NOT saved' : ''}
-            </span>
-            <button
-              className={wrap ? 'on' : ''}
-              onClick={() => setWrap((v) => !v)}
-              title="Wrap long lines (for LaTeX written without line breaks)"
-            >
-              ⏎ Wrap
-            </button>
-            <button
-              className={live ? 'on' : ''}
-              onClick={() => setLive((v) => !v)}
-              title="Live: recompile ~1s after you stop typing. Off: edits auto-save every 30s without recompiling — press Ctrl+S or Recompile to rebuild the PDF."
-            >
-              ⚡ Live
-            </button>
-            <button onClick={() => void save(true)} disabled={!dirty && saveState !== 'error'} title="Save and recompile (Ctrl+S)">Save</button>
-          </div>
-          <div className="format-bar">
-            <button title="Undo (Ctrl+Z)" onClick={() => { const v = cmRef.current?.view; if (v) { undo(v); v.focus(); } }}>↶</button>
-            <button title="Redo (Ctrl+Y)" onClick={() => { const v = cmRef.current?.view; if (v) { redo(v); v.focus(); } }}>↷</button>
-            <span className="fb-sep" />
-            <button title="Bold" onClick={() => wrapSelection('\\textbf{', '}', 'bold')}><b>B</b></button>
-            <button title="Italic" onClick={() => wrapSelection('\\emph{', '}', 'italic')}><i>I</i></button>
-            <span className="fb-sep" />
-            <button title="Section" onClick={() => insertAtLineStart('\\section{}')}>H1</button>
-            <button title="Subsection" onClick={() => insertAtLineStart('\\subsection{}')}>H2</button>
-            <span className="fb-sep" />
-            <button title="Bullet list" onClick={() => wrapSelection('\\begin{itemize}\n  \\item ', '\n\\end{itemize}', '')}>•</button>
-            <button title="Numbered list" onClick={() => wrapSelection('\\begin{enumerate}\n  \\item ', '\n\\end{enumerate}', '')}>1.</button>
-            <span className="fb-sep" />
-            <button title="Inline math" onClick={() => wrapSelection('$', '$', 'x')}>√x</button>
-            <button title="Display equation" onClick={() => wrapSelection('\\[\n  ', '\n\\]', '')}>∑</button>
-            <button title="Citation" onClick={() => wrapSelection('\\cite{', '}', 'key')}>[ ]</button>
-          </div>
-          <div className="editor-scroll" onClick={emitSyncFromCursor}>
-            <CodeMirror
-              ref={cmRef}
-              value={content}
-              theme="dark"
-              height="100%"
-              extensions={extensions}
-              onChange={onChange}
-              basicSetup={{ lineNumbers: true, foldGutter: false, highlightActiveLine: true }}
-            />
-          </div>
+            <div className={`source-code-pane ${visual ? 'view-hidden' : ''}`}>
+              <div className="editor-bar">
+                <span className="editor-file">{active}{dirty ? ' •' : ''}</span>
+                {showModeToggle && (
+                  <span className="seg" title="Code edits exact LaTeX; Live edits rendered prose while preserving protected commands">
+                    <button className={visual ? '' : 'on'} onClick={() => chooseVisual(false)}>Code</button>
+                    <button className={visual ? 'on' : ''} onClick={() => chooseVisual(true)}>Live</button>
+                  </span>
+                )}
+                <span className="spacer" />
+                {/* "save failed" beside a working-looking editor understated it: the
+                    text is not on disk. The reason goes in the tooltip, since when
+                    the server has stopped the reason is the only actionable part. */}
+                <span className={`save-state save-${saveState}`} title={saveError ?? undefined}>{saveStateText}</span>
+                <button
+                  className={wrap ? 'on' : ''}
+                  onClick={() => setWrap((v) => !v)}
+                  title="Wrap long lines (for LaTeX written without line breaks)"
+                >
+                  ⏎ Wrap
+                </button>
+                <button
+                  className={live ? 'on' : ''}
+                  onClick={() => setLive((v) => !v)}
+                  title="Auto PDF: recompile ~1s after you stop typing. Off: edits auto-save every 30s without recompiling — press Ctrl+S or Recompile to rebuild the PDF."
+                >
+                  ⚡ Auto PDF
+                </button>
+                <button onClick={() => void save(true)} disabled={!dirty && saveState !== 'error'} title="Save and recompile (Ctrl+S)">Save</button>
+              </div>
+              <div className="format-bar">
+                <button title="Undo (Ctrl+Z)" onClick={() => { const v = cmRef.current?.view; if (v) { undo(v); v.focus(); } }}>↶</button>
+                <button title="Redo (Ctrl+Y)" onClick={() => { const v = cmRef.current?.view; if (v) { redo(v); v.focus(); } }}>↷</button>
+                <span className="fb-sep" />
+                <button title="Bold" onClick={() => wrapSelection('\\textbf{', '}', 'bold')}><b>B</b></button>
+                <button title="Italic" onClick={() => wrapSelection('\\emph{', '}', 'italic')}><i>I</i></button>
+                <span className="fb-sep" />
+                <button title="Section" onClick={() => insertAtLineStart('\\section{}')}>H1</button>
+                <button title="Subsection" onClick={() => insertAtLineStart('\\subsection{}')}>H2</button>
+                <span className="fb-sep" />
+                <button title="Bullet list" onClick={() => wrapSelection('\\begin{itemize}\n  \\item ', '\n\\end{itemize}', '')}>•</button>
+                <button title="Numbered list" onClick={() => wrapSelection('\\begin{enumerate}\n  \\item ', '\n\\end{enumerate}', '')}>1.</button>
+                <span className="fb-sep" />
+                <button title="Inline math" onClick={() => wrapSelection('$', '$', 'x')}>√x</button>
+                <button title="Display equation" onClick={() => wrapSelection('\\[\n  ', '\n\\]', '')}>∑</button>
+                <button title="Citation" onClick={() => wrapSelection('\\cite{', '}', 'key')}>[ ]</button>
+              </div>
+              <div className="editor-scroll" onClick={emitSyncFromCursor}>
+                <CodeMirror
+                  ref={cmRef}
+                  value={content}
+                  theme="dark"
+                  height="100%"
+                  extensions={extensions}
+                  onChange={onChange}
+                  basicSetup={{ lineNumbers: true, foldGutter: false, highlightActiveLine: true }}
+                />
+              </div>
+            </div>
           </>
         ) : <div className="panel-hint">Select a source file to begin editing.</div>}
       </div>

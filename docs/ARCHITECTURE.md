@@ -114,7 +114,7 @@ A Vite+React+TS app built to `ui/dist` (`npm run build:ui`) and served staticall
 preview server at `/app` — same origin as the API and WebSocket, so no proxy/CORS. The server
 falls back to the legacy inline `/viewer` when `ui/dist` is missing (fresh clone before a build).
 
-- `ui/src/App.tsx` — persistent Code / Visual / PDF / Split / History workspaces. Focused
+- `ui/src/App.tsx` — persistent Code / Live / PDF / Split / History workspaces. Focused
   views give one task the canvas without unmounting the editor; Comments remains a right drawer.
 - `ui/src/components/Toolbar.tsx` — brand mark + doc title, Recompile, comments toggle,
   Export .zip / Download PDF.
@@ -125,11 +125,20 @@ falls back to the legacy inline `/viewer` when `ui/dist` is missing (fresh clone
   shortened) rather than pinned to frozen coordinates, so they track reflow after an edit;
   shaped like a text selection (first/last line partial, middle lines flush full-width) so a
   multi-line highlight doesn't fragment on font-metric quirks (italics, inline math).
-- `ui/src/components/SourcePanel.tsx` — CodeMirror 6 LaTeX editor (Code/Visual modes, line
-  wrap toggle) over `/api/files` + `/api/file` (GET/PUT, path-guarded); autosaves every 30s
+- `ui/src/components/SourcePanel.tsx` — CodeMirror 6 LaTeX editor plus a separate Live visual editor;
+  the editor stays mounted behind Live so unsaved text and undo history survive view changes. It
+  provides line wrapping over `/api/files` + `/api/file` (GET/PUT, path-guarded), autosaves every 30s
   without recompiling, Ctrl+S / Save / Recompile rebuild on demand; uses a vertical tree in
-  Split and a resizable tree sidebar in focused Code/Visual; opens the exact SyncTeX file/line
+  Split and a resizable tree sidebar in focused Code/Live; opens the exact SyncTeX file/line
   and uses nearby rendered prose to refine macro-expanded blocks.
+- `ui/src/latexPreview.ts` + `components/LivePreview.tsx` — tolerant, offset-preserving academic
+  LaTeX scanner and safe React visual editor. Every visible prose leaf carries exact source-boundary
+  coordinates. A contenteditable mutation is reduced to a common-prefix/suffix diff and projected
+  onto the smallest source slice; newly typed LaTeX-special characters are escaped. This avoids
+  whole-block HTML→LaTeX serialization and leaves protected or untouched source byte-for-byte intact.
+  It covers document structure, references, footnotes,
+  lists, KaTeX math, figures, and tables; recursively expands ordinary `\input`/`\include` files
+  while retaining their file:line maps. Unsupported constructs degrade locally and are reported.
 - `ui/src/components/FileTree.tsx` — nested Overleaf-style file tree: new/rename/delete,
   figure upload, resizable height.
 - `ui/src/components/HistoryPanel.tsx` + `DiffView.tsx` — semantic section tree and version graph

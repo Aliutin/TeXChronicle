@@ -1,4 +1,4 @@
-// The workspace shell: toolbar on top; primary Code / Visual / PDF / Split
+// The workspace shell: toolbar on top; primary Code / Live / PDF / Split
 // workspaces; History and Comments remain one click away. Split keeps the old
 // resizable side-by-side layout, while focused views give the task the canvas.
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -17,7 +17,7 @@ type EditorMode = 'code' | 'visual';
 const WORKSPACE_VIEWS: WorkspaceView[] = ['code', 'visual', 'pdf', 'split', 'history'];
 const WORKSPACE_HELP: Record<WorkspaceView, string> = {
   code: 'Raw LaTeX editor',
-  visual: 'Editable rendered source',
+  visual: 'Source-preserving visual editor',
   pdf: 'Compiled document',
   split: 'Source and PDF together',
   history: 'Section versions and diffs',
@@ -215,7 +215,7 @@ export default function App() {
             onClick={() => showWorkspace(view)}
             title={WORKSPACE_HELP[view]}
           >
-            {view === 'code' ? 'Code' : view === 'visual' ? 'Visual' : view === 'pdf' ? 'PDF' : 'Split'}
+            {view === 'code' ? 'Code' : view === 'visual' ? 'Live' : view === 'pdf' ? 'PDF' : 'Split'}
           </button>
         ))}
         <span className="workspace-help">{WORKSPACE_HELP[workspaceView]}</span>
@@ -240,9 +240,9 @@ export default function App() {
               History{noHistory && <span className="tab-warn" title="Nothing is being recorded — see the banner">!</span>}
             </button>
             {workspaceView === 'split' && leftTab === 'source' && (
-              <span className="seg split-editor-mode" title="Choose the editor presentation used beside the PDF">
+              <span className="seg split-editor-mode" title="Choose exact LaTeX source or source-preserving visual editing beside the PDF">
                 <button className={editorMode === 'code' ? 'on' : ''} onClick={() => setEditorMode('code')}>Code</button>
-                <button className={editorMode === 'visual' ? 'on' : ''} onClick={() => setEditorMode('visual')}>Visual</button>
+                <button className={editorMode === 'visual' ? 'on' : ''} onClick={() => setEditorMode('visual')}>Live</button>
               </span>
             )}
             <span className="spacer" />
