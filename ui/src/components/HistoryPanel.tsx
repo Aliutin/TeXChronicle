@@ -19,6 +19,19 @@ import { DiffView } from './DiffView';
 
 type HistoryView = 'sections' | 'project';
 
+export interface HistorySelection {
+  key: string;
+  sha: string;
+  title: string;
+  subtitle: string;
+  hasPdf: boolean;
+}
+
+export interface HistoryDiffDetail extends HistorySelection {
+  diff: string;
+  loading: boolean;
+}
+
 const fmt = (iso: string) => {
   try { return new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
   catch { return iso; }
@@ -31,9 +44,15 @@ const changeText = (version: SectionVersion): string => version.changes.map((cha
 export function HistoryPanel({
   reloadTick,
   onPreviewVersion,
+  showInlineDiff = true,
+  onSelectionChange,
+  onDiffChange,
 }: {
   reloadTick: number;
   onPreviewVersion?: (sha: string, title: string) => void;
+  showInlineDiff?: boolean;
+  onSelectionChange?: (selection: HistorySelection) => void;
+  onDiffChange?: (detail: HistoryDiffDetail) => void;
 }) {
   const [isRepo, setIsRepo] = useState<boolean | null>(null);
   const [mode, setMode] = useState<HistoryMode | null>(null);
@@ -61,10 +80,33 @@ export function HistoryPanel({
     () => section?.versions.findIndex((candidate) => candidate.sha === selectedVersion) ?? -1,
     [section, selectedVersion],
   );
+  const activeSelection = useMemo<HistorySelection | null>(() => {
+    if (view === 'sections' && section && version) {
+      return {
+        key: `section:${section.id}:${version.versionId}`,
+        sha: version.sha,
+        title: section.title,
+        subtitle: `${fmt(version.time)} · ${version.path}:${version.startLine}`,
+        hasPdf: version.hasPdf,
+      };
+    }
+    if (view === 'project' && selected) {
+      const checkpoint = items.find((candidate) => candidate.sha === selected);
+      if (checkpoint) {
+        return {
+          key: `project:${checkpoint.sha}`,
+          sha: checkpoint.sha,
+          title: 'Whole-project checkpoint',
+          subtitle: fmt(checkpoint.time),
+          hasPdf: false,
+        };
+      }
+    }
+    return null;
+  }, [items, section, selected, version, view]);
 
   const selectSectionVersion = (candidate: SectionVersion) => {
     setSelectedVersion(candidate.sha);
-    if (candidate.hasPdf) onPreviewVersion?.(candidate.sha, candidate.title);
   };
 
   const selectVersionAt = (index: number) => {
@@ -118,21 +160,44 @@ export function HistoryPanel({
   }, [section]);
 
   useEffect(() => {
-    if (view !== 'project' || !selected) { if (view === 'project') setDiff(''); return; }
-    fetchDiff(selected).then(setDiff);
-  }, [selected, view]);
+    if (activeSelection) onSelectionChange?.(activeSelection);
+  }, [activeSelection, onSelectionChange]);
 
   useEffect(() => {
-    if (view !== 'sections' || !selectedSection || !selectedVersion) {
+    if (view !== 'project' || !selected || !activeSelection) { if (view === 'project') setDiff(''); return; }
+    let cancelled = false;
+    setDiff('');
+    onDiffChange?.({ ...activeSelection, diff: '', loading: true });
+    fetchDiff(selected).then((result) => {
+      if (cancelled) return;
+      setDiff(result);
+      onDiffChange?.({ ...activeSelection, diff: result, loading: false });
+    });
+    return () => { cancelled = true; };
+  }, [activeSelection, onDiffChange, selected, view]);
+
+  useEffect(() => {
+    if (view !== 'sections' || !selectedSection || !selectedVersion || !activeSelection) {
       if (view === 'sections') setSectionDiff('');
       return;
     }
     let cancelled = false;
+    setSectionDiff('');
+    onDiffChange?.({ ...activeSelection, diff: '', loading: true });
     fetchSectionDiff(selectedSection, selectedVersion, includeSubsections)
-      .then((result) => { if (!cancelled) setSectionDiff(result.diff); })
-      .catch((error) => { if (!cancelled) setSectionDiff(`diff --git a/section b/section\n@@ -1 +1 @@\n-${String(error?.message ?? error)}\n`); });
+      .then((result) => {
+        if (cancelled) return;
+        setSectionDiff(result.diff);
+        onDiffChange?.({ ...activeSelection, diff: result.diff, loading: false });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        const failure = `diff --git a/section b/section\n@@ -1 +1 @@\n-${String(error?.message ?? error)}\n`;
+        setSectionDiff(failure);
+        onDiffChange?.({ ...activeSelection, diff: failure, loading: false });
+      });
     return () => { cancelled = true; };
-  }, [selectedSection, selectedVersion, includeSubsections, view]);
+  }, [activeSelection, includeSubsections, onDiffChange, selectedSection, selectedVersion, view]);
 
   if (isRepo === false) {
     return (
@@ -150,7 +215,7 @@ export function HistoryPanel({
   const baseLevel = semantic?.sections.filter((candidate) => candidate.present).reduce((min, candidate) => Math.min(min, candidate.level), 9) ?? 0;
 
   return (
-    <div className="history">
+    <div className={`history ${showInlineDiff ? '' : 'history-browser'}`}>
       {mode === 'shadow' && (
         <div className="history-note">
           Source history lives in <code>.latex-preview/history.git</code>; exact rendered PDFs live
@@ -248,14 +313,16 @@ export function HistoryPanel({
               </div>
               <span className="spacer" />
               <button disabled={!version.hasPdf} onClick={() => onPreviewVersion?.(version.sha, version.title)} title={version.hasPdf ? 'Show the exact PDF produced for this version' : 'This checkpoint predates stored PDF artifacts'}>
-                Show render
+                Show PDF
               </button>
               <button disabled={busy || Boolean(section?.present && version.versionId === section.versions[0]?.versionId)} onClick={() => void restoreSemantic()} title="Restore only this section and its subsections; current state is checkpointed first">
                 ↩ restore section
               </button>
             </div>
           )}
-          {sectionDiff ? <DiffView diff={sectionDiff} /> : <div className="panel-hint">Select a section version to see its own changes.</div>}
+          {showInlineDiff
+            ? (sectionDiff ? <DiffView diff={sectionDiff} /> : <div className="panel-hint">Select a section version to see its own changes.</div>)
+            : <div className="history-side-hint">The precise code difference is shown in the large pane on the right.</div>}
         </>
       ) : (
         <>
@@ -279,7 +346,7 @@ export function HistoryPanel({
               </div>
             ))}
           </div>
-          {diff ? (
+          {showInlineDiff && diff ? (
             <DiffView
               diff={diff}
               onRevertFile={selected ? async (file) => {
@@ -290,7 +357,9 @@ export function HistoryPanel({
                 if (error) alert(error);
               } : undefined}
             />
-          ) : <div className="panel-hint">Select a checkpoint to see its diff.</div>}
+          ) : showInlineDiff
+            ? <div className="panel-hint">Select a checkpoint to see its diff.</div>
+            : <div className="history-side-hint">The project code difference is shown in the large pane on the right.</div>}
         </>
       )}
     </div>

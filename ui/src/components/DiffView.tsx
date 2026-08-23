@@ -1,14 +1,15 @@
-// A small, self-contained unified-diff renderer for the History panel.
-// We render the raw `git diff` text ourselves instead of diff2html so we get:
-//   - calm, line-level coloring only (no busy word-level highlights),
-//   - a fully dark palette (diff2html's light "changed line" yellow was leaking),
-//   - wrapping long lines, so nothing overflows the panel and the line-number
-//     gutter always stays aligned with its (possibly wrapped) code line.
+// A small, self-contained unified-diff renderer for History. Git is line based,
+// but LaTeX prose is often one paragraph per physical line. Treating a one-word
+// edit as one deleted paragraph plus one added paragraph made the whole section
+// look rewritten. Similar -/+ line pairs are therefore folded into one row with
+// precise word-level marks; genuinely inserted/deleted lines stay line based.
+import { diffWordsWithSpace } from 'diff';
+import * as React from 'react';
 import { useMemo, useState } from 'react';
 
-type RowType = 'file' | 'hunk' | 'add' | 'del' | 'ctx';
-interface Row { type: RowType; oldNo?: number; newNo?: number; text: string }
-interface FileSection { file: string; rows: Row[]; adds: number; dels: number }
+type RowType = 'file' | 'hunk' | 'add' | 'del' | 'mod' | 'ctx';
+interface Row { type: RowType; oldNo?: number; newNo?: number; text: string; oldText?: string; newText?: string }
+interface FileSection { file: string; rows: Row[]; adds: number; dels: number; edits: number }
 
 function parseDiff(diff: string): Row[] {
   const rows: Row[] = [];
@@ -36,17 +37,82 @@ function parseDiff(diff: string): Row[] {
   return rows;
 }
 
+/** A short one-to-one replacement is naturally an edit even when every word
+ * changed. Long lines are paired only when enough text is shared, preventing
+ * unrelated deleted/added paragraphs from being presented as one mutation. */
+function isModification(oldText: string, newText: string): boolean {
+  const longest = Math.max(oldText.length, newText.length);
+  if (longest <= 120) return true;
+  const unchanged = diffWordsWithSpace(oldText, newText)
+    .filter((part) => !part.added && !part.removed)
+    .reduce((sum, part) => sum + part.value.length, 0);
+  return unchanged / longest >= 0.25;
+}
+
+/** Git emits a changed block as all '-' lines followed by all '+' lines. Pair
+ * the common one-to-one case so prose appears once, with only its edits marked. */
+function pairModifications(rows: Row[]): Row[] {
+  const result: Row[] = [];
+  for (let index = 0; index < rows.length;) {
+    if (rows[index].type !== 'del') { result.push(rows[index]); index++; continue; }
+    let delEnd = index;
+    while (delEnd < rows.length && rows[delEnd].type === 'del') delEnd++;
+    let addEnd = delEnd;
+    while (addEnd < rows.length && rows[addEnd].type === 'add') addEnd++;
+    const deleted = rows.slice(index, delEnd);
+    const added = rows.slice(delEnd, addEnd);
+    const canPair = deleted.length > 0 && deleted.length === added.length
+      && deleted.every((row, offset) => isModification(row.text, added[offset].text));
+    if (canPair) {
+      for (let offset = 0; offset < deleted.length; offset++) {
+        result.push({
+          type: 'mod',
+          oldNo: deleted[offset].oldNo,
+          newNo: added[offset].newNo,
+          text: '',
+          oldText: deleted[offset].text,
+          newText: added[offset].text,
+        });
+      }
+    } else {
+      result.push(...deleted, ...added);
+    }
+    index = addEnd;
+  }
+  return result;
+}
+
 /** Group the flat rows into per-file sections (with add/del counts). */
 function toSections(rows: Row[]): FileSection[] {
   const sections: FileSection[] = [];
   let cur: FileSection | null = null;
   for (const r of rows) {
-    if (r.type === 'file') { cur = { file: r.text, rows: [], adds: 0, dels: 0 }; sections.push(cur); continue; }
-    if (!cur) { cur = { file: '(changes)', rows: [], adds: 0, dels: 0 }; sections.push(cur); }
+    if (r.type === 'file') { cur = { file: r.text, rows: [], adds: 0, dels: 0, edits: 0 }; sections.push(cur); continue; }
+    if (!cur) { cur = { file: '(changes)', rows: [], adds: 0, dels: 0, edits: 0 }; sections.push(cur); }
     cur.rows.push(r);
-    if (r.type === 'add') cur.adds++; else if (r.type === 'del') cur.dels++;
   }
-  return sections;
+  return sections.map((section) => {
+    const paired = pairModifications(section.rows);
+    return {
+      ...section,
+      rows: paired,
+      adds: paired.filter((row) => row.type === 'add').length,
+      dels: paired.filter((row) => row.type === 'del').length,
+      edits: paired.filter((row) => row.type === 'mod').length,
+    };
+  });
+}
+
+function InlineWordDiff({ oldText, newText }: { oldText: string; newText: string }) {
+  const parts = useMemo(() => diffWordsWithSpace(oldText, newText), [oldText, newText]);
+  return <>{parts.map((part, index) => (
+    <span
+      key={index}
+      className={part.added ? 'dv-word-add' : part.removed ? 'dv-word-del' : undefined}
+    >
+      {part.value}
+    </span>
+  ))}</>;
 }
 
 export function DiffView({ diff, onRevertFile }: { diff: string; onRevertFile?: (file: string) => void }) {
@@ -62,6 +128,7 @@ export function DiffView({ diff, onRevertFile }: { diff: string; onRevertFile?: 
               <span className="dv-file-caret">{isCollapsed ? '▸' : '▾'}</span>
               <span className="dv-file-name">{s.file}</span>
               <span className="dv-file-stat">
+                {s.edits > 0 && <span className="edit">~{s.edits}</span>}
                 {s.adds > 0 && <span className="add">+{s.adds}</span>}
                 {s.dels > 0 && <span className="del"> −{s.dels}</span>}
               </span>
@@ -77,8 +144,12 @@ export function DiffView({ diff, onRevertFile }: { diff: string; onRevertFile?: 
                   <div key={i} className={`dv-row dv-${r.type}`}>
                     <span className="dv-num">{r.oldNo ?? ''}</span>
                     <span className="dv-num">{r.newNo ?? ''}</span>
-                    <span className="dv-sign">{r.type === 'add' ? '+' : r.type === 'del' ? '−' : ''}</span>
-                    <span className="dv-code">{r.text || ' '}</span>
+                    <span className="dv-sign">{r.type === 'add' ? '+' : r.type === 'del' ? '−' : r.type === 'mod' ? '±' : ''}</span>
+                    <span className="dv-code">
+                      {r.type === 'mod'
+                        ? <InlineWordDiff oldText={r.oldText ?? ''} newText={r.newText ?? ''} />
+                        : r.text || ' '}
+                    </span>
                   </div>
                 ),
             )}

@@ -69,9 +69,9 @@ a.linkbtn:hover { background: #18a862; }
 .left-view { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .left-view.view-hidden { display: none; }
 
-/* Focused source views use the whole workspace. History deliberately keeps its
-   timeline beside the rendered PDF so walking versions never loses context.
-   PDF focus does the inverse. The Comments drawer can accompany any view. */
+/* Focused source views use the whole workspace. History keeps its browser beside
+   a large source-diff canvas; its PDF is an explicit secondary mode. PDF focus
+   does the inverse. The Comments drawer can accompany any view. */
 .layout.workspace-code .left,
 .layout.workspace-visual .left { flex: 1 1 auto; min-width: 0; border-right: 0; }
 .layout.workspace-code .center,
@@ -449,9 +449,28 @@ button.ghost.tiny { font-size: 11px; padding: 1px 6px; margin-left: auto; }
 .version-stepper { display: flex; align-items: center; gap: 5px; }
 .version-position { min-width: 38px; color: #9ba3ad; font-size: 11px; text-align: center;
                     font-variant-numeric: tabular-nums; }
+.history-side-hint { flex: 1 1 auto; display: flex; align-items: center; justify-content: center;
+                     min-height: 60px; padding: 18px; color: #737d89; text-align: center; line-height: 1.5; }
+.history-browser .section-tree { max-height: 43%; }
+.history-browser .section-versions { max-height: 43%; }
 
-/* Our own diff renderer (DiffView): calm line-level coloring, dark palette,
-   long lines WRAP so nothing overflows the panel and the gutter stays aligned. */
+/* The dedicated History workspace: navigation stays narrow, while source
+   changes get the readable canvas. PDF is a deliberate toggle, not navigation. */
+.history-detail { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column;
+                  background: #0d1117; }
+.history-detail-toolbar { flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
+                          min-height: 43px; padding: 6px 10px; border-bottom: 1px solid #17181a;
+                          background: #26282c; }
+.history-detail-title { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.history-detail-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                               color: #e6edf3; }
+.history-detail-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                             color: #8b949e; font-size: 11px; }
+.history-detail-mode { flex: 0 0 auto; }
+.history-detail-mode button { padding: 4px 10px; font-size: 11px; }
+
+/* Our own diff renderer: exact word marks inside paired prose edits, calm
+   line-level color for true insertions/deletions, and wrapping long LaTeX. */
 .diffview { flex: 1 1 auto; overflow: auto; background: #0d1117;
             font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 11.5px;
             line-height: 1.5; color: #c9d1d9; }
@@ -462,7 +481,8 @@ button.ghost.tiny { font-size: 11px; padding: 1px 6px; margin-left: auto; }
 .dv-file-caret { color: #8b949e; width: 10px; }
 .dv-file-name { overflow: hidden; text-overflow: ellipsis; }
 .dv-file-stat { margin-left: auto; font-weight: 400; font-variant-numeric: tabular-nums; }
-.dv-file-stat .add { color: #56d364; } .dv-file-stat .del { color: #f85149; }
+.dv-file-stat .edit { color: #d2a8ff; }
+.dv-file-stat .add { margin-left: 5px; color: #56d364; } .dv-file-stat .del { color: #f85149; }
 .dv-file-revert { font-size: 12px; padding: 0 6px; opacity: 0; }
 .dv-file:hover .dv-file-revert { opacity: 1; }
 .dv-hunk { padding: 3px 10px; color: #7d8894; background: #0d1117; }
@@ -473,6 +493,12 @@ button.ghost.tiny { font-size: 11px; padding: 1px 6px; margin-left: auto; }
 .dv-code { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 10px; }
 .dv-add { background: #0f2318; } .dv-add .dv-num { background: #0f2318; } .dv-add .dv-sign { color: #3fb950; }
 .dv-del { background: #2a1519; } .dv-del .dv-num { background: #2a1519; } .dv-del .dv-sign { color: #f85149; }
+.dv-mod { background: #101720; }
+.dv-mod .dv-sign { color: #d2a8ff; }
+.dv-word-del { margin: 0 1px; padding: 0 2px; border-radius: 2px; background: #64242a;
+               color: #ffb3ad; text-decoration: line-through; text-decoration-thickness: 1px; }
+.dv-word-add { margin: 0 1px; padding: 0 2px; border-radius: 2px; background: #174d2a;
+               color: #acf2bd; }
 
 /* No-git warning. Amber rather than red: nothing is broken and the compile still
    works — what's lost is the record, which is worth noticing without alarming.

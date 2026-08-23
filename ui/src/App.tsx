@@ -1,11 +1,12 @@
 // The workspace shell: toolbar on top; primary Code / Live / PDF / Split
-// workspaces; History and Comments remain one click away. Split and History
-// keep a resizable side-by-side layout; focused editing views own the canvas.
+// workspaces; History and Comments remain one click away. History uses its own
+// version browser + large code-diff canvas, with the exact PDF available on demand.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchComments, fetchGitStatus, historicalPdfUrl, useLive, type Comment, type HistoryMode, type SyncTeXSourceLocation } from './api';
 import { Toolbar } from './components/Toolbar';
 import { PdfView } from './components/PdfView';
-import { HistoryPanel } from './components/HistoryPanel';
+import { HistoryPanel, type HistoryDiffDetail, type HistorySelection } from './components/HistoryPanel';
+import { DiffView } from './components/DiffView';
 import { SourcePanel } from './components/SourcePanel';
 import { CommentsPanel } from './components/CommentsPanel';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -13,6 +14,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 type LeftTab = 'source' | 'history';
 type WorkspaceView = 'code' | 'visual' | 'pdf' | 'split' | 'history';
 type EditorMode = 'code' | 'visual';
+type HistoryPane = 'diff' | 'pdf';
 
 const WORKSPACE_VIEWS: WorkspaceView[] = ['code', 'visual', 'pdf', 'split', 'history'];
 const WORKSPACE_HELP: Record<WorkspaceView, string> = {
@@ -20,7 +22,7 @@ const WORKSPACE_HELP: Record<WorkspaceView, string> = {
   visual: 'Source-preserving visual editor',
   pdf: 'Compiled document',
   split: 'Source and PDF together',
-  history: 'Section history and exact PDF side by side',
+  history: 'Version browser and precise code changes',
 };
 
 // Minimum widths are measured, not guessed. The left panel carries fixed-size
@@ -101,6 +103,9 @@ export default function App() {
   useEffect(() => { fetchGitStatus().then((s) => { setHistoryMode(s.mode); setHistoryDetail(s.detail); }); }, []);
   const [syncToPdf, setSyncToPdf] = useState<{ text: string; nonce: number } | null>(null);
   const [historicalPdf, setHistoricalPdf] = useState<{ sha: string; title: string } | null>(null);
+  const [historySelection, setHistorySelection] = useState<HistorySelection | null>(null);
+  const [historyDiffDetail, setHistoryDiffDetail] = useState<HistoryDiffDetail | null>(null);
+  const [historyPane, setHistoryPane] = useState<HistoryPane>('diff');
   useEffect(() => { localStorage.setItem('ws-workspace-view', workspaceView); }, [workspaceView]);
   useEffect(() => {
     if (workspaceView === 'code' || workspaceView === 'visual') setLeftTab('source');
@@ -116,6 +121,8 @@ export default function App() {
     } else if (view === 'history') {
       setLeftTab('history');
       setLeftOpen(true);
+      setHistoryPane('diff');
+      setHistoricalPdf(null);
     }
   }, []);
 
@@ -135,9 +142,24 @@ export default function App() {
     // It must not navigate to the focused PDF view and hide the timeline.
     setLeftTab('history');
     setLeftOpen(true);
+    setHistoryPane('pdf');
     // PdfView retries the text jump after its historical pages finish rendering.
     setSyncToPdf({ text: title, nonce: Date.now() });
   }, []);
+  const onHistorySelection = useCallback((selection: HistorySelection) => {
+    setHistorySelection(selection);
+    setHistoryPane('diff');
+    setHistoricalPdf(null);
+  }, []);
+  const onHistoryDiff = useCallback((detail: HistoryDiffDetail) => {
+    setHistoryDiffDetail(detail);
+  }, []);
+  const showSelectedHistoryPdf = useCallback(() => {
+    if (!historySelection?.hasPdf) return;
+    setHistoricalPdf({ sha: historySelection.sha, title: historySelection.title });
+    setHistoryPane('pdf');
+    setSyncToPdf({ text: historySelection.title, nonce: Date.now() });
+  }, [historySelection]);
 
   const refreshComments = useCallback(() => { fetchComments().then(setComments).catch(() => {}); }, []);
   useEffect(() => { refreshComments(); }, [refreshComments]);
@@ -274,7 +296,15 @@ export default function App() {
             </ErrorBoundary>
           </div>
           <div className={`left-view ${leftTab === 'history' ? '' : 'view-hidden'}`}>
-            <ErrorBoundary name="History panel"><HistoryPanel reloadTick={reloadTick} onPreviewVersion={onPreviewVersion} /></ErrorBoundary>
+            <ErrorBoundary name="History panel">
+              <HistoryPanel
+                reloadTick={reloadTick}
+                onPreviewVersion={onPreviewVersion}
+                showInlineDiff={workspaceView === 'split'}
+                onSelectionChange={onHistorySelection}
+                onDiffChange={onHistoryDiff}
+              />
+            </ErrorBoundary>
           </div>
         </div>
         {historyOrSplit && leftOpen && <Splitter dir="left" width={leftWidth} setWidth={setLeftWidth} min={MIN_LEFT} />}
@@ -282,19 +312,67 @@ export default function App() {
 
         <div className="center">
           {errorLog && <pre className="compile-error">{errorLog}</pre>}
-          <ErrorBoundary name="PDF view">
-            <PdfView
-              reloadTick={reloadTick}
-              pdfUrl={historicalPdf ? historicalPdfUrl(historicalPdf.sha) : '/latest.pdf'}
-              historicalLabel={historicalPdf?.title}
-              onReturnLatest={historicalPdf ? () => setHistoricalPdf(null) : undefined}
-              comments={historicalPdf ? [] : comments}
-              onPages={setPages}
-              onSelectComment={historicalPdf ? undefined : onSelectFromPdf}
-              onSyncToSource={historicalPdf ? undefined : onSyncToSource}
-              syncTarget={syncToPdf}
-            />
-          </ErrorBoundary>
+          {workspaceView === 'history' ? (
+            <div className="history-detail">
+              <div className="history-detail-toolbar">
+                <div className="history-detail-title">
+                  <strong>{historySelection?.title ?? 'Select a version'}</strong>
+                  {historySelection && <span>{historySelection.subtitle}</span>}
+                </div>
+                <span className="spacer" />
+                <span className="seg history-detail-mode" aria-label="History detail view">
+                  <button
+                    className={historyPane === 'diff' ? 'on' : ''}
+                    aria-pressed={historyPane === 'diff'}
+                    onClick={() => { setHistoryPane('diff'); setHistoricalPdf(null); }}
+                  >
+                    Code changes
+                  </button>
+                  <button
+                    className={historyPane === 'pdf' ? 'on' : ''}
+                    aria-pressed={historyPane === 'pdf'}
+                    disabled={!historySelection?.hasPdf}
+                    onClick={showSelectedHistoryPdf}
+                    title={historySelection?.hasPdf ? 'Show the exact PDF saved with this version' : 'No stored PDF for this version'}
+                  >
+                    Rendered PDF
+                  </button>
+                </span>
+              </div>
+              {historyPane === 'diff' ? (
+                !historySelection ? <div className="panel-hint">Choose a section and version on the left.</div>
+                  : historyDiffDetail?.key !== historySelection.key || historyDiffDetail.loading
+                    ? <div className="panel-hint">Loading precise code changes…</div>
+                    : historyDiffDetail.diff
+                      ? <DiffView diff={historyDiffDetail.diff} />
+                      : <div className="panel-hint">No source text changed in this section at this checkpoint.</div>
+              ) : (
+                <ErrorBoundary name="Historical PDF view">
+                  <PdfView
+                    reloadTick={reloadTick}
+                    pdfUrl={historicalPdf ? historicalPdfUrl(historicalPdf.sha) : '/latest.pdf'}
+                    comments={[]}
+                    onPages={setPages}
+                    syncTarget={syncToPdf}
+                  />
+                </ErrorBoundary>
+              )}
+            </div>
+          ) : (
+            <ErrorBoundary name="PDF view">
+              <PdfView
+                reloadTick={reloadTick}
+                pdfUrl={historicalPdf ? historicalPdfUrl(historicalPdf.sha) : '/latest.pdf'}
+                historicalLabel={historicalPdf?.title}
+                onReturnLatest={historicalPdf ? () => setHistoricalPdf(null) : undefined}
+                comments={historicalPdf ? [] : comments}
+                onPages={setPages}
+                onSelectComment={historicalPdf ? undefined : onSelectFromPdf}
+                onSyncToSource={historicalPdf ? undefined : onSyncToSource}
+                syncTarget={syncToPdf}
+              />
+            </ErrorBoundary>
+          )}
         </div>
 
         {rightOpen && <Splitter dir="right" width={rightWidth} setWidth={setRightWidth} min={MIN_RIGHT} />}
