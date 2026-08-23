@@ -1,6 +1,7 @@
 // Same-origin API helpers + the WebSocket live channel. The UI is served by the
 // preview server itself, so everything is relative — no config, no CORS.
 import { useEffect, useRef, useState } from 'react';
+import { extractDocumentTitle } from './sync';
 
 export interface Checkpoint {
   sha: string;
@@ -284,16 +285,21 @@ export async function recompile(): Promise<void> {
   try { await fetch('/api/recompile', { method: 'POST' }); } catch { /* ignore */ }
 }
 
-/** The document's \title{…} (from the main .tex) for the header, if any. */
-export async function fetchDocTitle(): Promise<string | null> {
+/** The document's \title{…} (from the compiled main .tex) for the header. */
+export async function fetchDocTitle(preferredMain?: string): Promise<string | null> {
   try {
     const files: string[] = await (await fetch('/api/files')).json();
-    for (const f of files) {
+    const wantedStem = preferredMain?.replace(/\.tex$/i, '').split(/[\\/]/).pop();
+    const ordered = [...files].sort((a, b) => {
+      const stem = (f: string) => f.replace(/\.tex$/i, '').split('/').pop();
+      return Number(stem(b) === wantedStem) - Number(stem(a) === wantedStem);
+    });
+    for (const f of ordered) {
       if (!/\.tex$/i.test(f)) continue;
       const src = await (await fetch(`/api/file?path=${encodeURIComponent(f)}`)).text();
       if (!/\\documentclass/.test(src)) continue;
-      const m = src.match(/\\title\s*(?:\[[^\]]*\])?\s*\{((?:[^{}]|\{[^{}]*\})*)\}/);
-      if (m) return m[1].replace(/\\\\|\\thanks\{[^}]*\}/g, ' ').replace(/\s+/g, ' ').trim();
+      const title = extractDocumentTitle(src);
+      if (title) return title;
     }
   } catch { /* ignore */ }
   return null;

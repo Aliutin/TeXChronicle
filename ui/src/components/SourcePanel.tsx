@@ -21,13 +21,24 @@ import { saveFile, type Status } from '../api';
 const LIVE_DEBOUNCE_MS = 1200; // Live mode: recompile this long after you stop typing
 const AUTOSAVE_MS = 30000;      // safety net: persist edits (no recompile) every 30s
 interface SyncTarget { text: string; nonce: number; file?: string; line?: number; column?: number }
+export type SourceMode = 'code' | 'visual';
 
 export function SourcePanel({
   reloadTick, syncTarget, onSyncToPdf, dead = false, liveStatus, compileSeq = 0,
+  mode, wide = false, showModeToggle = true, onModeChange, preferredFile,
 }: {
   reloadTick: number;
   syncTarget?: SyncTarget | null;
   onSyncToPdf?: (text: string) => void;
+  /** Controlled editor presentation used by the global Code / Visual views. */
+  mode?: SourceMode;
+  /** In a focused source workspace the file tree becomes a left sidebar. */
+  wide?: boolean;
+  /** Split view keeps the compact local Code / Visual switch. */
+  showModeToggle?: boolean;
+  onModeChange?: (mode: SourceMode) => void;
+  /** Main document name reported by the compiler; preferred over alphabetic file 1. */
+  preferredFile?: string;
   /** The server this window came from has stopped; writes cannot land. */
   dead?: boolean;
   /** The live compile status. The save chip follows this rather than a timer —
@@ -41,14 +52,24 @@ export function SourcePanel({
   const [content, setContent] = useState('');
   const [dirty, setDirty] = useState(false);
   const [live, setLive] = useState(() => localStorage.getItem('ws-live') === '1'); // recompile-as-you-type, default off
-  const [visual, setVisual] = useState(() => localStorage.getItem('ws-visual') === '1');
+  const [localVisual, setLocalVisual] = useState(() => localStorage.getItem('ws-visual') === '1');
+  const visual = mode ? mode === 'visual' : localVisual;
+  const chooseVisual = useCallback((next: boolean) => {
+    setLocalVisual(next);
+    onModeChange?.(next ? 'visual' : 'code');
+  }, [onModeChange]);
   const [wrap, setWrap] = useState(() => localStorage.getItem('ws-wrap') === '1');
   const [treeHeight, setTreeHeight] = useState(() => {
     const v = Number(localStorage.getItem('ws-tree-h'));
-    return Number.isFinite(v) && v >= 80 ? v : 200;
+    return Number.isFinite(v) && v >= 80 ? v : 150;
   });
-  const treeDrag = useRef<{ startY: number; startH: number } | null>(null);
+  const [treeWidth, setTreeWidth] = useState(() => {
+    const v = Number(localStorage.getItem('ws-tree-w'));
+    return Number.isFinite(v) && v >= 190 ? v : 280;
+  });
+  const treeDrag = useRef<{ start: number; size: number } | null>(null);
   useEffect(() => { localStorage.setItem('ws-tree-h', String(treeHeight)); }, [treeHeight]);
+  useEffect(() => { localStorage.setItem('ws-tree-w', String(treeWidth)); }, [treeWidth]);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'compiling' | 'compile-failed' | 'error'>('idle');
   const [loadError, setLoadError] = useState<string | null>(null);
   // Why the save failed, not just that it did. 'save failed' next to a
@@ -74,10 +95,12 @@ export function SourcePanel({
   const parked = useRef<Map<string, string>>(new Map());
   const [dirtyPaths, setDirtyPaths] = useState<Set<string>>(new Set());
   const pendingJump = useRef<{ path: string; line: number } | null>(null);
+  const visualTransition = useRef(false);
   // File reads can finish out of order (especially when a PDF click changes the
   // target twice quickly). Only the newest navigation is allowed to replace the
   // editor buffer.
   const openRequest = useRef(0);
+  const initialChoice = useRef<string | null>(null);
   // Parked files plus the one on screen, so the marker is right for the file the
   // user is actually looking at as well as the ones they left.
   const allDirty = useMemo(() => {
@@ -136,9 +159,30 @@ export function SourcePanel({
   useEffect(() => {
     fetch('/api/files').then((r) => r.json()).then((list: string[]) => {
       setFiles(list);
-      if (list.length) openFile(list[0]);
+      if (list.length) {
+        const wanted = preferredFile
+          ? list.find((f) => f.replace(/\.tex$/i, '').split('/').pop() === preferredFile.replace(/\.tex$/i, '').split('/').pop())
+          : undefined;
+        const choice = wanted ?? list[0];
+        initialChoice.current = choice;
+        openFile(choice);
+      }
     }).catch(() => {});
   }, [openFile]);
+
+  // The WebSocket may report the main document after the file list returned.
+  // Upgrade only the untouched automatic first choice; never steal the editor
+  // after the user selected or edited another file.
+  useEffect(() => {
+    if (!preferredFile || !files.length || dirtyRef.current) return;
+    const wantedStem = preferredFile.replace(/\.tex$/i, '').split('/').pop();
+    const wanted = files.find((f) => f.replace(/\.tex$/i, '').split('/').pop() === wantedStem);
+    if (!wanted || wanted === activeRef.current) return;
+    if (initialChoice.current && activeRef.current === initialChoice.current) {
+      initialChoice.current = wanted;
+      void openFile(wanted);
+    }
+  }, [preferredFile, files, active, openFile]);
 
   // External edits (Claude, another editor) recompile → reload event. Drop the
   // cache so cross-file search re-reads, and refresh the open buffer when clean.
@@ -301,6 +345,24 @@ export function SourcePanel({
     });
   }, [active, content, jumpToLine]);
 
+  // A full Visual workspace that opens on eighty dim package declarations
+  // looks broken, even though the rendered body is farther down. On entry only,
+  // if the cursor is still at the very start, land on the title/body. Preserve
+  // the user's position for every ordinary Code ↔ Visual switch after that.
+  useEffect(() => {
+    if (!visual) { visualTransition.current = false; return; }
+    if (visualTransition.current || !active || !content) return;
+    const view = cmRef.current?.view;
+    if (!view) return;
+    visualTransition.current = true;
+    if (view.state.doc.lineAt(view.state.selection.main.head).number > 3) return;
+    const lines = content.split(/\r?\n/);
+    const title = lines.findIndex((line) => /\\title\s*(?:\[|\{)/.test(line));
+    const begin = lines.findIndex((line) => /\\begin\s*\{document\}/.test(line));
+    const target = title >= 0 ? title : begin >= 0 ? begin + 1 : 0;
+    requestAnimationFrame(() => jumpToLine(target));
+  }, [visual, active, content, jumpToLine]);
+
   // PDF → source: prefer the genuine SyncTeX file+line. Visible prose refines
   // nearby macro-expanded material (all of \maketitle may map to one invocation)
   // and is still the full fallback for the bundled WASM engine.
@@ -395,36 +457,53 @@ export function SourcePanel({
   useEffect(() => { localStorage.setItem('ws-wrap', wrap ? '1' : '0'); }, [wrap]);
 
   return (
-    <div className="source">
-      <FileTree active={active} onOpen={openFile} refreshKey={reloadTick} height={treeHeight} dirtyPaths={allDirty} />
+    <div className={`source ${wide ? 'source-wide' : ''}`}>
+      <div className="source-tree-pane" style={wide ? { width: treeWidth } : undefined}>
+        <FileTree
+          active={active}
+          onOpen={openFile}
+          refreshKey={reloadTick}
+          height={wide ? undefined : treeHeight}
+          dirtyPaths={allDirty}
+        />
+      </div>
       <div
         className="vsplitter"
-        title="Drag to resize the file tree"
+        title={`Drag to resize the file tree ${wide ? 'width' : 'height'}`}
         onPointerDown={(e) => {
-          treeDrag.current = { startY: e.clientY, startH: treeHeight };
+          treeDrag.current = { start: wide ? e.clientX : e.clientY, size: wide ? treeWidth : treeHeight };
           (e.target as HTMLElement).setPointerCapture(e.pointerId);
-          document.body.classList.add('resizing-v');
+          document.body.classList.add(wide ? 'resizing-tree-wide' : 'resizing-v');
         }}
         onPointerMove={(e) => {
           if (!treeDrag.current) return;
-          const next = treeDrag.current.startH + (e.clientY - treeDrag.current.startY);
-          setTreeHeight(Math.min(Math.max(next, 80), window.innerHeight - 220));
+          const point = wide ? e.clientX : e.clientY;
+          const next = treeDrag.current.size + point - treeDrag.current.start;
+          if (wide) {
+            const panelWidth = (e.currentTarget.parentElement as HTMLElement | null)?.clientWidth ?? window.innerWidth;
+            setTreeWidth(Math.min(Math.max(next, 190), Math.max(240, panelWidth * 0.45)));
+          } else {
+            setTreeHeight(Math.min(Math.max(next, 80), window.innerHeight - 220));
+          }
         }}
         onPointerUp={(e) => {
           treeDrag.current = null;
           (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-          document.body.classList.remove('resizing-v');
+          document.body.classList.remove('resizing-v', 'resizing-tree-wide');
         }}
       />
-      {loadError && <div className="panel-hint load-error">{loadError}</div>}
-      {active && (
-        <>
+      <div className="source-editor-pane">
+        {loadError && <div className="panel-hint load-error">{loadError}</div>}
+        {active ? (
+          <>
           <div className="editor-bar">
             <span className="editor-file">{active}{dirty ? ' •' : ''}</span>
-            <span className="seg" title="Code shows raw LaTeX; Visual renders headings, bold, italic in place">
-              <button className={visual ? '' : 'on'} onClick={() => setVisual(false)}>Code</button>
-              <button className={visual ? 'on' : ''} onClick={() => setVisual(true)}>Visual</button>
-            </span>
+            {showModeToggle && (
+              <span className="seg" title="Code shows raw LaTeX; Visual renders headings, bold, italic in place">
+                <button className={visual ? '' : 'on'} onClick={() => chooseVisual(false)}>Code</button>
+                <button className={visual ? 'on' : ''} onClick={() => chooseVisual(true)}>Visual</button>
+              </span>
+            )}
             <span className="spacer" />
             {/* "save failed" beside a working-looking editor understated it: the
                 text is not on disk. The reason goes in the tooltip, since when
@@ -476,8 +555,9 @@ export function SourcePanel({
               basicSetup={{ lineNumbers: true, foldGutter: false, highlightActiveLine: true }}
             />
           </div>
-        </>
-      )}
+          </>
+        ) : <div className="panel-hint">Select a source file to begin editing.</div>}
+      </div>
     </div>
   );
 }

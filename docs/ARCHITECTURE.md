@@ -114,7 +114,8 @@ A Vite+React+TS app built to `ui/dist` (`npm run build:ui`) and served staticall
 preview server at `/app` — same origin as the API and WebSocket, so no proxy/CORS. The server
 falls back to the legacy inline `/viewer` when `ui/dist` is missing (fresh clone before a build).
 
-- `ui/src/App.tsx` — three-panel shell: left tabs (Source | History), PDF center, Comments right.
+- `ui/src/App.tsx` — persistent Code / Visual / PDF / Split / History workspaces. Focused
+  views give one task the canvas without unmounting the editor; Comments remains a right drawer.
 - `ui/src/components/Toolbar.tsx` — brand mark + doc title, Recompile, comments toggle,
   Export .zip / Download PDF.
 - `ui/src/components/PdfView.tsx` — pdf.js canvas + **text layer** (selectable) + highlight
@@ -126,8 +127,9 @@ falls back to the legacy inline `/viewer` when `ui/dist` is missing (fresh clone
   multi-line highlight doesn't fragment on font-metric quirks (italics, inline math).
 - `ui/src/components/SourcePanel.tsx` — CodeMirror 6 LaTeX editor (Code/Visual modes, line
   wrap toggle) over `/api/files` + `/api/file` (GET/PUT, path-guarded); autosaves every 30s
-  without recompiling, Ctrl+S / Save / Recompile rebuild on demand; opens the exact SyncTeX
-  file/line and uses nearby rendered prose to refine macro-expanded blocks.
+  without recompiling, Ctrl+S / Save / Recompile rebuild on demand; uses a vertical tree in
+  Split and a resizable tree sidebar in focused Code/Visual; opens the exact SyncTeX file/line
+  and uses nearby rendered prose to refine macro-expanded blocks.
 - `ui/src/components/FileTree.tsx` — nested Overleaf-style file tree: new/rename/delete,
   figure upload, resizable height.
 - `ui/src/components/HistoryPanel.tsx` + `DiffView.tsx` — semantic section tree and version graph

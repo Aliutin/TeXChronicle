@@ -13,12 +13,14 @@ export function FileTree({
    *  the user has no way to know the text is still there, waiting. */
   dirtyPaths?: Set<string>;
   refreshKey: number; // bump to reload the tree (e.g. after external edits)
-  height: number;     // pane height in px (drag-resizable from the parent)
+  /** Split view uses a fixed, draggable height; focused source views fill a sidebar. */
+  height?: number;
 }) {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [err, setErr] = useState<string | null>(null);
   const uploadInput = useRef<HTMLInputElement>(null);
+  const treeBody = useRef<HTMLDivElement>(null);
   const uploadDir = useRef<string>(''); // folder to upload into (root by default)
 
   const reload = useCallback(async () => {
@@ -31,6 +33,25 @@ export function FileTree({
     } catch { setTree([]); }
   }, []);
   useEffect(() => { reload(); }, [reload, refreshKey]);
+  // Keep large projects calm: folders start collapsed, but a file opened by a
+  // PDF jump (or another part of the UI) reveals its ancestor chain.
+  useEffect(() => {
+    if (!active?.includes('/')) return;
+    const parts = active.split('/');
+    const ancestors = parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join('/'));
+    setOpen((current) => {
+      if (ancestors.every((path) => current[path])) return current;
+      const next = { ...current };
+      for (const path of ancestors) next[path] = true;
+      return next;
+    });
+  }, [active]);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      treeBody.current?.querySelector('.tree-row.on')?.scrollIntoView({ block: 'nearest' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [active, open]);
 
   const doOp = async (op: string, path: string, to?: string) => {
     const e = await fsOp(op, path, to);
@@ -70,7 +91,7 @@ export function FileTree({
   };
 
   const Row = ({ node, depth }: { node: TreeNode; depth: number }) => {
-    const isOpen = open[node.path] ?? depth === 0;
+    const isOpen = open[node.path] ?? false;
     return (
       <>
         <div
@@ -98,7 +119,9 @@ export function FileTree({
   };
 
   return (
-    <div className="file-tree" style={{ height, flex: '0 0 auto' }}>
+    <div className="file-tree" style={height === undefined
+      ? { height: '100%', flex: '1 1 auto' }
+      : { height, flex: '0 0 auto' }}>
       <div className="tree-head">
         <span>Files</span>
         <span className="spacer" />
@@ -112,7 +135,7 @@ export function FileTree({
         onChange={(e) => void onUpload(e.target.files)}
       />
       {err && <div className="panel-hint load-error">{err}</div>}
-      <div className="tree-body">
+      <div className="tree-body" ref={treeBody}>
         {tree.map((n) => <Row key={n.path} node={n} depth={0} />)}
         {tree.length === 0 && <div className="panel-hint">No files yet.</div>}
       </div>

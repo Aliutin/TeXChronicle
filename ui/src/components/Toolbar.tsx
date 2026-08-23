@@ -24,7 +24,11 @@ export function Toolbar({
   useEffect(() => { fetchOverleafLink().then(setOverleafUrl); }, []);
   useEffect(() => { if (status === 'ok') setHasPdf(true); }, [status]);
   // Refresh the \title after each compile (it may have been edited).
-  useEffect(() => { fetchDocTitle().then(setTitle); }, [reloadTick]);
+  useEffect(() => {
+    let cancelled = false;
+    fetchDocTitle(pdfName).then((next) => { if (!cancelled) setTitle(next); });
+    return () => { cancelled = true; };
+  }, [reloadTick, pdfName]);
   const compiling = status === 'compiling';
   // Nothing is listening on this port any more, so these would fail silently —
   // and a button that looks live is part of what makes a dead window pass for one.

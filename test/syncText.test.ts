@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { findSourceLine, normalize, stripLatex } from '../ui/src/sync.js';
+import { extractDocumentTitle, findSourceLine, normalize, stripLatex } from '../ui/src/sync.js';
 
 test('normalization preserves non-ASCII words and folds visible accents', () => {
   assert.equal(normalize('Castañeda — Ўзбекистон'), 'castaneda узбекистон');
@@ -29,4 +29,14 @@ test('visible prose refines a maketitle-wide SyncTeX result', () => {
 test('fallback matching spans normally wrapped source lines', () => {
   const source = 'Policy feedback crosses\nsource line boundaries in ordinary editors.';
   assert.equal(findSourceLine(source, 'Policy feedback crosses source line boundaries'), 0);
+});
+
+test('a nested legacy title does not leak thanks, authors, or date into the header', () => {
+  const source = String.raw`\documentclass{article}
+\title{{\Large Double Vision in Policy Implementation}
+  \thanks{{\footnotesize Preliminary draft.}}
+  \author{First Author \\ University}
+  \date{August 2026}}
+\begin{document}`;
+  assert.equal(extractDocumentTitle(source), 'Double Vision in Policy Implementation');
 });

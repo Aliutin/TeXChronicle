@@ -28,6 +28,34 @@ export function stripLatex(line: string): string {
     .trim();
 }
 
+/** Extract a balanced \title{...} and reduce it to a compact visible heading.
+ * Real papers often put \thanks, \author and \date inside the title argument,
+ * so a one-level regex either fails or turns the entire author block into the
+ * browser header. */
+export function extractDocumentTitle(source: string): string | null {
+  const uncommented = source.split(/\r?\n/).filter((line) => !line.trimStart().startsWith('%')).join('\n');
+  const match = /\\title\s*(?:\[[^\]]*\])?\s*\{/.exec(uncommented);
+  if (!match) return null;
+  const start = match.index + match[0].length;
+  let depth = 1;
+  let end = -1;
+  for (let i = start; i < uncommented.length; i++) {
+    const char = uncommented[i];
+    const escaped = i > 0 && uncommented[i - 1] === '\\';
+    if (char === '{' && !escaped) depth++;
+    else if (char === '}' && !escaped && --depth === 0) { end = i; break; }
+  }
+  if (end < 0) return null;
+  // These metadata commands may legally sit inside \title in legacy papers.
+  // The toolbar needs the document name, not acknowledgments and affiliations.
+  const heading = uncommented.slice(start, end).split(/\\(?:thanks|author|date)\s*\{/i)[0];
+  const visible = stripLatex(heading)
+    .replace(/``|''/g, '"')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return visible || null;
+}
+
 /** First `maxWords` normalized words of a string (a distinctive phrase). */
 export function phrase(text: string, maxWords = 6): string {
   return normalize(text).split(' ').filter(Boolean).slice(0, maxWords).join(' ');

@@ -1,6 +1,6 @@
-// The workspace shell: toolbar on top; left tabbed panel (Source | History);
-// PDF center with anchored comments; Comments workspace on the right. Both side
-// panels resize with Overleaf-style drag splitters (widths persisted).
+// The workspace shell: toolbar on top; primary Code / Visual / PDF / Split
+// workspaces; History and Comments remain one click away. Split keeps the old
+// resizable side-by-side layout, while focused views give the task the canvas.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchComments, fetchGitStatus, historicalPdfUrl, useLive, type Comment, type HistoryMode, type SyncTeXSourceLocation } from './api';
 import { Toolbar } from './components/Toolbar';
@@ -11,6 +11,17 @@ import { CommentsPanel } from './components/CommentsPanel';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
 type LeftTab = 'source' | 'history';
+type WorkspaceView = 'code' | 'visual' | 'pdf' | 'split' | 'history';
+type EditorMode = 'code' | 'visual';
+
+const WORKSPACE_VIEWS: WorkspaceView[] = ['code', 'visual', 'pdf', 'split', 'history'];
+const WORKSPACE_HELP: Record<WorkspaceView, string> = {
+  code: 'Raw LaTeX editor',
+  visual: 'Editable rendered source',
+  pdf: 'Compiled document',
+  split: 'Source and PDF together',
+  history: 'Section versions and diffs',
+};
 
 // Minimum widths are measured, not guessed. The left panel carries fixed-size
 // control rows, and the widest rigid one is the format bar: 15 buttons that
@@ -68,6 +79,13 @@ export default function App() {
   const [leftTab, setLeftTab] = useState<LeftTab>('history');
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(false);
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(() => {
+    const saved = localStorage.getItem('ws-workspace-view') as WorkspaceView | null;
+    return saved && WORKSPACE_VIEWS.includes(saved) ? saved : 'pdf';
+  });
+  const [editorMode, setEditorMode] = useState<EditorMode>(() =>
+    localStorage.getItem('ws-visual') === '1' ? 'visual' : 'code',
+  );
   const [pages, setPages] = useState(0);
   const [leftWidth, setLeftWidth] = usePanelWidth('ws-left-width', 420, MIN_LEFT);
   const [rightWidth, setRightWidth] = usePanelWidth('ws-right-width', 320, MIN_RIGHT);
@@ -83,14 +101,37 @@ export default function App() {
   useEffect(() => { fetchGitStatus().then((s) => { setHistoryMode(s.mode); setHistoryDetail(s.detail); }); }, []);
   const [syncToPdf, setSyncToPdf] = useState<{ text: string; nonce: number } | null>(null);
   const [historicalPdf, setHistoricalPdf] = useState<{ sha: string; title: string } | null>(null);
+  useEffect(() => { localStorage.setItem('ws-workspace-view', workspaceView); }, [workspaceView]);
+  useEffect(() => {
+    if (workspaceView === 'code' || workspaceView === 'visual') setLeftTab('source');
+    else if (workspaceView === 'history') setLeftTab('history');
+  }, [workspaceView]);
+
+  const showWorkspace = useCallback((view: WorkspaceView) => {
+    setWorkspaceView(view);
+    if (view === 'code' || view === 'visual') {
+      setEditorMode(view);
+      setLeftTab('source');
+      setLeftOpen(true);
+    } else if (view === 'history') {
+      setLeftTab('history');
+      setLeftOpen(true);
+    }
+  }, []);
+
   const onSyncToSource = useCallback((target: { text: string } & Partial<SyncTeXSourceLocation>) => {
     setLeftTab('source');
     setLeftOpen(true);
+    // In a focused PDF/history view, the destination should become visible.
+    // Split already has both sides, so preserve it there.
+    setWorkspaceView((view) => view === 'split' ? view : 'code');
+    setEditorMode('code');
     setSyncToSource({ ...target, nonce: Date.now() });
   }, []);
   const onSyncToPdf = useCallback((text: string) => { setSyncToPdf({ text, nonce: Date.now() }); }, []);
   const onPreviewVersion = useCallback((sha: string, title: string) => {
     setHistoricalPdf({ sha, title });
+    setWorkspaceView('pdf');
     // PdfView retries the text jump after its historical pages finish rendering.
     setSyncToPdf({ text: title, nonce: Date.now() });
   }, []);
@@ -104,6 +145,7 @@ export default function App() {
 
   const jumpToComment = useCallback((c: Comment) => {
     setSelectedComment(c.id);
+    setWorkspaceView('pdf');
     const hls = document.querySelectorAll(`.hl[data-id="${c.id}"]`);
     if (hls.length) {
       hls[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -163,21 +205,75 @@ export default function App() {
           <button className="ghost" onClick={() => setWarnDismissed(true)} title="Dismiss">×</button>
         </div>
       )}
-      <div className="layout">
-        <div className={`left ${leftOpen ? '' : 'closed'}`} style={leftOpen ? { flexBasis: leftWidth } : undefined}>
+      <nav className="workspace-nav" aria-label="Workspace view">
+        <span className="workspace-nav-label">View</span>
+        {(['code', 'visual', 'pdf', 'split'] as WorkspaceView[]).map((view) => (
+          <button
+            key={view}
+            className={workspaceView === view ? 'on' : ''}
+            aria-pressed={workspaceView === view}
+            onClick={() => showWorkspace(view)}
+            title={WORKSPACE_HELP[view]}
+          >
+            {view === 'code' ? 'Code' : view === 'visual' ? 'Visual' : view === 'pdf' ? 'PDF' : 'Split'}
+          </button>
+        ))}
+        <span className="workspace-help">{WORKSPACE_HELP[workspaceView]}</span>
+        <span className="spacer" />
+        <button
+          className={workspaceView === 'history' ? 'on' : ''}
+          aria-pressed={workspaceView === 'history'}
+          onClick={() => showWorkspace('history')}
+          title={WORKSPACE_HELP.history}
+        >
+          History{noHistory && <span className="tab-warn" title="Nothing is being recorded — see the banner">!</span>}
+        </button>
+      </nav>
+      <div className={`layout workspace-${workspaceView}`}>
+        <div
+          className={`left ${workspaceView === 'split' && !leftOpen ? 'closed' : ''}`}
+          style={workspaceView === 'split' && leftOpen ? { flexBasis: leftWidth } : undefined}
+        >
           <div className="tabs">
             <button className={leftTab === 'source' ? 'on' : ''} onClick={() => setLeftTab('source')}>Source</button>
             <button className={leftTab === 'history' ? 'on' : ''} onClick={() => setLeftTab('history')}>
               History{noHistory && <span className="tab-warn" title="Nothing is being recorded — see the banner">!</span>}
             </button>
+            {workspaceView === 'split' && leftTab === 'source' && (
+              <span className="seg split-editor-mode" title="Choose the editor presentation used beside the PDF">
+                <button className={editorMode === 'code' ? 'on' : ''} onClick={() => setEditorMode('code')}>Code</button>
+                <button className={editorMode === 'visual' ? 'on' : ''} onClick={() => setEditorMode('visual')}>Visual</button>
+              </span>
+            )}
             <span className="spacer" />
-            <button className="ghost" onClick={() => setLeftOpen(false)} title="Collapse">«</button>
+            {workspaceView === 'split' && <button className="ghost" onClick={() => setLeftOpen(false)} title="Collapse">«</button>}
           </div>
-          {leftTab === 'history' && <ErrorBoundary name="History panel"><HistoryPanel reloadTick={reloadTick} onPreviewVersion={onPreviewVersion} /></ErrorBoundary>}
-          {leftTab === 'source' && <ErrorBoundary name="Source editor"><SourcePanel reloadTick={reloadTick} syncTarget={syncToSource} onSyncToPdf={onSyncToPdf} dead={status === "stopped"} liveStatus={status} compileSeq={compileSeq} /></ErrorBoundary>}
+          <div className={`left-view ${leftTab === 'source' ? '' : 'view-hidden'}`}>
+            <ErrorBoundary name="Source editor">
+              <SourcePanel
+                reloadTick={reloadTick}
+                syncTarget={syncToSource}
+                onSyncToPdf={onSyncToPdf}
+                dead={status === 'stopped'}
+                liveStatus={status}
+                compileSeq={compileSeq}
+                mode={editorMode}
+                wide={workspaceView === 'code' || workspaceView === 'visual'}
+                showModeToggle={false}
+                preferredFile={pdfName}
+                onModeChange={(mode) => {
+                  setEditorMode(mode);
+                  if (workspaceView === 'code' || workspaceView === 'visual') setWorkspaceView(mode);
+                }}
+              />
+            </ErrorBoundary>
+          </div>
+          <div className={`left-view ${leftTab === 'history' ? '' : 'view-hidden'}`}>
+            <ErrorBoundary name="History panel"><HistoryPanel reloadTick={reloadTick} onPreviewVersion={onPreviewVersion} /></ErrorBoundary>
+          </div>
         </div>
-        {leftOpen && <Splitter dir="left" width={leftWidth} setWidth={setLeftWidth} min={MIN_LEFT} />}
-        {!leftOpen && <button className="edge-open left-edge" onClick={() => setLeftOpen(true)} title="Open panel">»</button>}
+        {workspaceView === 'split' && leftOpen && <Splitter dir="left" width={leftWidth} setWidth={setLeftWidth} min={MIN_LEFT} />}
+        {workspaceView === 'split' && !leftOpen && <button className="edge-open left-edge" onClick={() => setLeftOpen(true)} title="Open panel">»</button>}
 
         <div className="center">
           {errorLog && <pre className="compile-error">{errorLog}</pre>}
