@@ -5,11 +5,108 @@
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { access, readFile, mkdir } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, delimiter, dirname, join } from 'node:path';
 import type { CompileOutput } from './browserHost.js';
 import type { Engine } from '../project/compileProject.js';
 
 const pexec = promisify(execFile);
+
+interface LatexmkLaunch {
+  command: string;
+  prefixArgs: string[];
+  env?: NodeJS.ProcessEnv;
+}
+
+const pathLaunch = (): LatexmkLaunch => ({ command: 'latexmk', prefixArgs: [] });
+let latexmkLaunch = pathLaunch();
+
+async function exists(path: string): Promise<boolean> {
+  return access(path).then(() => true, () => false);
+}
+
+function childEnvWithPath(prepend: string[]): NodeJS.ProcessEnv {
+  const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'Path';
+  const inherited = process.env[pathKey] ?? '';
+  return {
+    ...process.env,
+    [pathKey]: [...new Set([...prepend, inherited].filter(Boolean))].join(delimiter),
+  };
+}
+
+/**
+ * Windows installers broadcast a PATH update, but an already-running MCP/app
+ * process keeps the old environment. MiKTeX also commonly lives in its default
+ * per-user directory without being on PATH at all. Discover the two standard
+ * installations and, when both are present, run MiKTeX's latexmk script with
+ * Strawberry Perl directly. This makes an install made mid-session usable after
+ * the next probe instead of requiring a reboot or manual PATH surgery.
+ */
+async function windowsLatexmkLaunches(): Promise<LatexmkLaunch[]> {
+  if (process.platform !== 'win32') return [];
+
+  const local = process.env.LOCALAPPDATA;
+  const programFiles = process.env.ProgramFiles;
+  const programW6432 = process.env.ProgramW6432;
+  const programFilesX86 = process.env['ProgramFiles(x86)'];
+  const programData = process.env.ProgramData;
+  const systemDrive = process.env.SystemDrive ?? (process.env.SystemRoot?.slice(0, 2) || 'C:');
+
+  const perlPaths = [
+    join(systemDrive, 'Strawberry', 'perl', 'bin', 'perl.exe'),
+    local ? join(local, 'Programs', 'Strawberry', 'perl', 'bin', 'perl.exe') : '',
+    programFiles ? join(programFiles, 'Strawberry Perl', 'perl', 'bin', 'perl.exe') : '',
+    programW6432 ? join(programW6432, 'Strawberry Perl', 'perl', 'bin', 'perl.exe') : '',
+  ].filter(Boolean);
+  const perls: string[] = [];
+  for (const perl of [...new Set(perlPaths)]) if (await exists(perl)) perls.push(perl);
+  if (!perls.length) return [];
+
+  const launches: LatexmkLaunch[] = [];
+  // First retry whatever latexmk the process already knows, but with newly
+  // installed Strawberry directories visible to MiKTeX's script-engine lookup.
+  for (const perl of perls) {
+    const strawberry = dirname(dirname(dirname(perl)));
+    launches.push({
+      command: 'latexmk',
+      prefixArgs: [],
+      env: childEnvWithPath([
+        dirname(perl),
+        join(strawberry, 'perl', 'site', 'bin'),
+        join(strawberry, 'c', 'bin'),
+      ]),
+    });
+  }
+
+  const miktexRoots = [
+    local ? join(local, 'Programs', 'MiKTeX') : '',
+    programFiles ? join(programFiles, 'MiKTeX') : '',
+    programW6432 ? join(programW6432, 'MiKTeX') : '',
+    programFilesX86 ? join(programFilesX86, 'MiKTeX') : '',
+    programData ? join(programData, 'MiKTeX') : '',
+  ].filter(Boolean);
+  for (const root of [...new Set(miktexRoots)]) {
+    const script = join(root, 'scripts', 'latexmk', 'latexmk.pl');
+    if (!(await exists(script))) continue;
+    const binCandidates = [join(root, 'miktex', 'bin', 'x64'), join(root, 'miktex', 'bin')];
+    const miktexBin = (await Promise.all(binCandidates.map(async (path) => [path, await exists(path)] as const)))
+      .find(([, present]) => present)?.[0];
+    if (!miktexBin) continue;
+    for (const perl of perls) {
+      const strawberry = dirname(dirname(dirname(perl)));
+      launches.push({
+        command: perl,
+        prefixArgs: [script],
+        env: childEnvWithPath([
+          miktexBin,
+          dirname(perl),
+          join(strawberry, 'perl', 'site', 'bin'),
+          join(strawberry, 'c', 'bin'),
+        ]),
+      });
+    }
+  }
+  return launches;
+}
 
 /**
  * What to tell someone who turns out not to have a local TeX.
@@ -119,24 +216,35 @@ export async function probeSystemTex(): Promise<SystemTexProbe> {
   // A positive result is kept: TeX does not uninstall itself mid-session, and
   // re-probing before every compile would spawn a process for nothing.
   if (probe?.usable) return probe;
-  try {
-    await pexec('latexmk', ['-version'], { timeout: 6000 });
-    probe = { usable: true };
-  } catch (e) {
-    const err = e as NodeJS.ErrnoException & { stdout?: string; stderr?: string };
-    // ENOENT is "no such executable". Anything else means latexmk was found and
-    // failed to run — on Windows that is nearly always MiKTeX, whose latexmk is
-    // a Perl script it ships no interpreter for, so the binary exists and can
-    // never execute. Reported as "not found", that sends people off to install
-    // a distribution they already have.
-    const absent = err.code === 'ENOENT';
-    const said = [err.stdout, err.stderr, err.message].filter(Boolean).join('\n').trim();
-    probe = {
-      usable: false,
-      reason: absent ? 'absent' : 'broken',
-      detail: absent ? undefined : said.slice(0, 600) || undefined,
-    };
+  const launches = [pathLaunch(), ...(await windowsLatexmkLaunches())];
+  let failure: (NodeJS.ErrnoException & { stdout?: string; stderr?: string }) | undefined;
+  for (const launch of launches) {
+    try {
+      await pexec(launch.command, [...launch.prefixArgs, '-version'], { timeout: 6000, env: launch.env });
+      latexmkLaunch = launch;
+      probe = { usable: true };
+      return probe;
+    } catch (e) {
+      const err = e as NodeJS.ErrnoException & { stdout?: string; stderr?: string };
+      // Prefer a failure from something that really existed over ENOENT: it
+      // carries the actionable MiKTeX/Perl message instead of "not found".
+      if (!failure || failure.code === 'ENOENT' || err.code !== 'ENOENT') failure = err;
+    }
   }
+
+  const err = (failure ?? Object.assign(new Error('latexmk was not found'), { code: 'ENOENT' })) as
+    NodeJS.ErrnoException & { stdout?: string; stderr?: string };
+  // ENOENT is "no such executable". Anything else means latexmk was found and
+  // failed to run. Reported as "not found", that sends people off to install a
+  // distribution they already have.
+  const absent = err.code === 'ENOENT';
+  const said = [err.stdout, err.stderr, err.message].filter(Boolean).join('\n').trim();
+  latexmkLaunch = pathLaunch();
+  probe = {
+    usable: false,
+    reason: absent ? 'absent' : 'broken',
+    detail: absent ? undefined : said.slice(0, 600) || undefined,
+  };
   return probe;
 }
 
@@ -149,6 +257,7 @@ export async function hasSystemTex(): Promise<boolean> {
  *  changed under us. */
 export function forgetSystemTex(): void {
   probe = undefined;
+  latexmkLaunch = pathLaunch();
 }
 
 /**
@@ -265,6 +374,13 @@ export function systemLatexmkArgs(
   ];
 }
 
+/** latexmk can cache a failed rule, then answer the next corrected run with
+ * "Nothing to do" while returning the old nonzero status. A forced dependency
+ * rebuild is appropriate only for that exact stale-error combination. */
+export function isStaleLatexmkFailure(log: string): boolean {
+  return /Nothing to do/i.test(log) && /error in previous invocation/i.test(log);
+}
+
 /**
  * Stop waiting when latexmk has gone quiet, not when the clock says so.
  *
@@ -325,7 +441,14 @@ export async function compileWithSystemTex(root: string, mainRelPath: string, en
   // particular source is trusted.
   const args = systemLatexmkArgs(outdir, mainRelPath, engine, shellEscape, hadPdf && !hadSync);
 
-  const { code, out, stopped } = await runLatexmk(root, args);
+  let { code, out, stopped } = await runLatexmk(root, args);
+  if (!stopped && code !== 0 && isStaleLatexmkFailure(out)) {
+    const retryArgs = systemLatexmkArgs(outdir, mainRelPath, engine, shellEscape, true);
+    const retry = await runLatexmk(root, retryArgs);
+    code = retry.code;
+    stopped = retry.stopped;
+    out += `\n\n[MagicTeX: latexmk retained an earlier failed rule; forced one clean dependency rebuild.]\n${retry.out}`;
+  }
 
   if (stopped) {
     const waited = Math.round((Date.now() - started) / 1000);
@@ -359,9 +482,11 @@ export async function compileWithSystemTex(root: string, mainRelPath: string, en
  *  throws: a non-zero exit is an ordinary outcome here, not an exception. */
 function runLatexmk(cwd: string, args: string[]): Promise<{ code: number | null; out: string; stopped?: 'idle' | 'cap' }> {
   return new Promise((resolve) => {
-    const child = spawn('latexmk', args, {
+    const launch = latexmkLaunch;
+    const child = spawn(launch.command, [...launch.prefixArgs, ...args], {
       cwd,
       windowsHide: true,
+      env: launch.env,
       // POSIX: its own process group, so killTree can take the group down.
       detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],

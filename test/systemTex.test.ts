@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, chmodSync, copyFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, chmodSync, copyFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { probeSystemTex, forgetSystemTex, systemTexUnavailableMessage, systemTexAdvice } from '../src/engine/systemTex.js';
+import { probeSystemTex, forgetSystemTex, isStaleLatexmkFailure, systemTexUnavailableMessage, systemTexAdvice } from '../src/engine/systemTex.js';
 
 // "No local TeX" and "a local TeX that cannot run" are different problems with
 // opposite answers, and they used to produce the same sentence. A user installed
@@ -112,6 +112,16 @@ test('a package the local TeX is also missing does get a tlmgr command, with the
   assert.match(msg, /tlmgr install newtxmath/, 'a placeholder like `<package>` is a command nobody can paste');
 });
 
+test('only latexmk stale-error output triggers a forced rebuild', () => {
+  assert.equal(isStaleLatexmkFailure([
+    "Latexmk: Nothing to do for 'paper.tex'.",
+    'Collected error summary:',
+    '  pdflatex: gave an error in previous invocation of latexmk.',
+  ].join('\n')), true);
+  assert.equal(isStaleLatexmkFailure("Latexmk: Nothing to do for 'paper.tex'. All targets are up-to-date."), false);
+  assert.equal(isStaleLatexmkFailure('! LaTeX Error: Undefined control sequence.'), false);
+});
+
 // ── the staleness fix ───────────────────────────────────────────────────────
 
 /**
@@ -135,6 +145,54 @@ function fakeLatexmk(dir: string): void {
   chmodSync(p, 0o755);
 }
 
+const WINDOWS_DISCOVERY_ENV = ['LOCALAPPDATA', 'SystemDrive', 'ProgramFiles', 'ProgramW6432', 'ProgramFiles(x86)', 'ProgramData'] as const;
+
+function isolateWindowsDiscovery(root: string): () => void {
+  const previous = new Map<string, string | undefined>();
+  for (const key of WINDOWS_DISCOVERY_ENV) previous.set(key, process.env[key]);
+  process.env.LOCALAPPDATA = join(root, 'local');
+  process.env.SystemDrive = join(root, 'drive');
+  process.env.ProgramFiles = join(root, 'program-files');
+  process.env.ProgramW6432 = join(root, 'program-w6432');
+  process.env['ProgramFiles(x86)'] = join(root, 'program-files-x86');
+  process.env.ProgramData = join(root, 'program-data');
+  return () => {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  };
+}
+
+test('Windows discovers installed MiKTeX and Strawberry Perl outside stale PATH', { skip: process.platform !== 'win32' }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'commontex-'));
+  const emptyPath = join(root, 'empty-path');
+  const restoreDiscovery = isolateWindowsDiscovery(root);
+  const previousPath = process.env.PATH;
+  try {
+    mkdirSync(emptyPath, { recursive: true });
+    const scriptDir = join(process.env.LOCALAPPDATA!, 'Programs', 'MiKTeX', 'scripts', 'latexmk');
+    const miktexBin = join(process.env.LOCALAPPDATA!, 'Programs', 'MiKTeX', 'miktex', 'bin', 'x64');
+    const perlDir = join(process.env.SystemDrive!, 'Strawberry', 'perl', 'bin');
+    mkdirSync(scriptDir, { recursive: true });
+    mkdirSync(miktexBin, { recursive: true });
+    mkdirSync(perlDir, { recursive: true });
+    // Node is a convenient real Windows executable that accepts a script path;
+    // the file extension does not matter, so it stands in for Perl faithfully.
+    writeFileSync(join(scriptDir, 'latexmk.pl'), 'process.exit(0);');
+    copyFileSync(process.execPath, join(perlDir, 'perl.exe'));
+
+    process.env.PATH = emptyPath;
+    forgetSystemTex();
+    const found = await probeSystemTex();
+    assert.equal(found.usable, true, 'the common installs were ignored because the process PATH was stale');
+  } finally {
+    forgetSystemTex();
+    if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+    restoreDiscovery();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a TeX that appears after the first check is not ignored for the rest of the session', async () => {
   // The memo used to be permanent, so a `null` recorded at startup outlived any
   // install — including one the user made *because* MagicTeX told them a package
@@ -142,6 +200,7 @@ test('a TeX that appears after the first check is not ignored for the rest of th
   // working session.
   const dir = mkdtempSync(join(tmpdir(), 'faketex-'));
   const prevPath = process.env.PATH;
+  const restoreDiscovery = isolateWindowsDiscovery(dir);
   try {
     forgetSystemTex();
     process.env.PATH = dir; // nothing here yet
@@ -164,6 +223,7 @@ test('a TeX that appears after the first check is not ignored for the rest of th
   } finally {
     forgetSystemTex();
     if (prevPath === undefined) delete process.env.PATH; else process.env.PATH = prevPath;
+    restoreDiscovery();
     rmSync(dir, { recursive: true, force: true });
   }
 });
