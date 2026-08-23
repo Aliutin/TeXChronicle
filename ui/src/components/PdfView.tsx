@@ -54,9 +54,13 @@ interface Draft { page: number; quote: string; rects: { x: number; y: number; w:
 interface SyncTarget { text: string; nonce: number }
 
 export function PdfView({
-  reloadTick, comments, onPages, onSelectComment, onSyncToSource, syncTarget,
+  reloadTick, pdfUrl = '/latest.pdf', historicalLabel, onReturnLatest,
+  comments, onPages, onSelectComment, onSyncToSource, syncTarget,
 }: {
   reloadTick: number;
+  pdfUrl?: string;
+  historicalLabel?: string;
+  onReturnLatest?: () => void;
   comments: Comment[];
   onPages?: (n: number) => void;
   onSelectComment?: (id: string) => void;
@@ -92,8 +96,8 @@ export function PdfView({
       const container = pagesRef.current;
       const scroller = scrollRef.current;
       if (!container || !scroller) return;
-      step = 'fetching /latest.pdf';
-      const res = await fetch('/latest.pdf?t=' + Date.now());
+      step = `fetching ${pdfUrl}`;
+      const res = await fetch(`${pdfUrl}${pdfUrl.includes('?') ? '&' : '?'}t=${Date.now()}`);
       if (!res.ok) { setNoteIsReport(false); setNote('No PDF yet — ask Claude to render a preview.'); return; }
       const data = new Uint8Array(await res.arrayBuffer());
       step = `parsing PDF (${data.length} bytes)`;
@@ -196,7 +200,7 @@ export function PdfView({
       );
     });
     return () => { cancelled = true; };
-  }, [reloadTick, scale, onPages]);
+  }, [reloadTick, scale, onPages, pdfUrl]);
 
   // ── Track which page is in view (for the page indicator) ────────────────
   useEffect(() => {
@@ -269,7 +273,7 @@ export function PdfView({
       setTimeout(() => hit.classList.remove('sync-flash'), 1400);
       break;
     }
-  }, [syncTarget]);
+  }, [syncTarget, renderTick]);
 
   // ── Project highlights onto pages ───────────────────────────────────────
   useEffect(() => {
@@ -446,6 +450,7 @@ export function PdfView({
 
   // ── Selection → comment composer ────────────────────────────────────────
   const onMouseUp = () => {
+    if (historicalLabel) return; // comments belong to the live source/PDF pair
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) return;
     const quote = sel.toString().trim();
@@ -483,6 +488,12 @@ export function PdfView({
   return (
     <div className="pdf-wrap">
       <div className="pdf-toolbar">
+        {historicalLabel && (
+          <div className="historical-pdf" title="This is the exact PDF stored for a section version">
+            <span>History: {historicalLabel}</span>
+            <button className="ghost" onClick={onReturnLatest}>Back to latest</button>
+          </div>
+        )}
         <div className="pager">
           <button className="ghost" onClick={() => goToPage(currentPage - 1)} disabled={currentPage <= 1} title="Previous page">▲</button>
           <input

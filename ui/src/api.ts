@@ -10,6 +10,55 @@ export interface Checkpoint {
   deletions: number;
 }
 
+export type SectionChange = 'created' | 'edited' | 'renamed' | 'moved' | 'reordered' | 'structure' | 'descendant';
+export type MatchConfidence = 'exact' | 'high' | 'medium' | 'low';
+
+export interface SectionVersion {
+  versionId: string;
+  sha: string;
+  time: string;
+  title: string;
+  path: string;
+  startLine: number;
+  endLine: number;
+  parentId?: string;
+  changes: SectionChange[];
+  confidence: MatchConfidence;
+  matchScore: number;
+  predecessorIds: string[];
+  hasPdf: boolean;
+}
+
+export interface SectionHistoryItem {
+  id: string;
+  title: string;
+  label?: string;
+  command: string;
+  level: number;
+  appendix: boolean;
+  path: string;
+  parentId?: string;
+  order: number;
+  present: boolean;
+  versions: SectionVersion[];
+}
+
+export interface SectionHistoryPayload {
+  head: string;
+  checkpointCount: number;
+  sections: SectionHistoryItem[];
+}
+
+export interface SectionDiffResult {
+  sectionId: string;
+  sha: string;
+  predecessorSha?: string;
+  title: string;
+  previousTitle?: string;
+  scope: 'text' | 'subtree';
+  diff: string;
+}
+
 export type WsMessage =
   | { type: 'reload'; name?: string }
   | { type: 'compiling' }
@@ -103,6 +152,31 @@ export async function fetchCheckpoints(): Promise<Checkpoint[]> {
 export async function fetchDiff(sha: string): Promise<string> {
   const r = await fetch(`/git/diff?sha=${encodeURIComponent(sha)}`);
   return r.ok ? r.text() : '';
+}
+
+export async function fetchSectionHistory(): Promise<SectionHistoryPayload> {
+  const r = await fetch('/git/sections');
+  if (!r.ok) throw new Error((await r.text()) || 'section history failed');
+  return r.json();
+}
+
+export async function fetchSectionDiff(section: string, sha: string, subtree: boolean): Promise<SectionDiffResult> {
+  const query = new URLSearchParams({ section, sha, subtree: subtree ? '1' : '0' });
+  const r = await fetch(`/git/section-diff?${query}`);
+  if (!r.ok) throw new Error((await r.text()) || 'section diff failed');
+  return r.json();
+}
+
+/** Restore one semantic section (including its subsections), reversibly. */
+export async function restoreSection(section: string, sha: string): Promise<string | null> {
+  if (serverGone) return new ServerGoneError().message;
+  const query = new URLSearchParams({ section, sha });
+  const r = await fetch(`/git/restore-section?${query}`, { method: 'POST' });
+  return r.ok ? null : (await r.text()) || 'section restore failed';
+}
+
+export function historicalPdfUrl(sha: string): string {
+  return `/git/render?sha=${encodeURIComponent(sha)}`;
 }
 
 /** Restore the working tree to a checkpoint (revert). Returns an error string or null. */

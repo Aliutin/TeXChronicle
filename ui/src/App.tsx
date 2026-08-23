@@ -2,7 +2,7 @@
 // PDF center with anchored comments; Comments workspace on the right. Both side
 // panels resize with Overleaf-style drag splitters (widths persisted).
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { fetchComments, fetchGitStatus, useLive, type Comment, type HistoryMode } from './api';
+import { fetchComments, fetchGitStatus, historicalPdfUrl, useLive, type Comment, type HistoryMode } from './api';
 import { Toolbar } from './components/Toolbar';
 import { PdfView } from './components/PdfView';
 import { HistoryPanel } from './components/HistoryPanel';
@@ -82,12 +82,18 @@ export default function App() {
   const [warnDismissed, setWarnDismissed] = useState(false);
   useEffect(() => { fetchGitStatus().then((s) => { setHistoryMode(s.mode); setHistoryDetail(s.detail); }); }, []);
   const [syncToPdf, setSyncToPdf] = useState<{ text: string; nonce: number } | null>(null);
+  const [historicalPdf, setHistoricalPdf] = useState<{ sha: string; title: string } | null>(null);
   const onSyncToSource = useCallback((text: string) => {
     setLeftTab('source');
     setLeftOpen(true);
     setSyncToSource({ text, nonce: Date.now() });
   }, []);
   const onSyncToPdf = useCallback((text: string) => { setSyncToPdf({ text, nonce: Date.now() }); }, []);
+  const onPreviewVersion = useCallback((sha: string, title: string) => {
+    setHistoricalPdf({ sha, title });
+    // PdfView retries the text jump after its historical pages finish rendering.
+    setSyncToPdf({ text: title, nonce: Date.now() });
+  }, []);
 
   const refreshComments = useCallback(() => { fetchComments().then(setComments).catch(() => {}); }, []);
   useEffect(() => { refreshComments(); }, [refreshComments]);
@@ -167,7 +173,7 @@ export default function App() {
             <span className="spacer" />
             <button className="ghost" onClick={() => setLeftOpen(false)} title="Collapse">«</button>
           </div>
-          {leftTab === 'history' && <ErrorBoundary name="History panel"><HistoryPanel reloadTick={reloadTick} /></ErrorBoundary>}
+          {leftTab === 'history' && <ErrorBoundary name="History panel"><HistoryPanel reloadTick={reloadTick} onPreviewVersion={onPreviewVersion} /></ErrorBoundary>}
           {leftTab === 'source' && <ErrorBoundary name="Source editor"><SourcePanel reloadTick={reloadTick} syncTarget={syncToSource} onSyncToPdf={onSyncToPdf} dead={status === "stopped"} liveStatus={status} compileSeq={compileSeq} /></ErrorBoundary>}
         </div>
         {leftOpen && <Splitter dir="left" width={leftWidth} setWidth={setLeftWidth} min={MIN_LEFT} />}
@@ -176,7 +182,17 @@ export default function App() {
         <div className="center">
           {errorLog && <pre className="compile-error">{errorLog}</pre>}
           <ErrorBoundary name="PDF view">
-            <PdfView reloadTick={reloadTick} comments={comments} onPages={setPages} onSelectComment={onSelectFromPdf} onSyncToSource={onSyncToSource} syncTarget={syncToPdf} />
+            <PdfView
+              reloadTick={reloadTick}
+              pdfUrl={historicalPdf ? historicalPdfUrl(historicalPdf.sha) : '/latest.pdf'}
+              historicalLabel={historicalPdf?.title}
+              onReturnLatest={historicalPdf ? () => setHistoricalPdf(null) : undefined}
+              comments={historicalPdf ? [] : comments}
+              onPages={setPages}
+              onSelectComment={historicalPdf ? undefined : onSelectFromPdf}
+              onSyncToSource={historicalPdf ? undefined : onSyncToSource}
+              syncTarget={syncToPdf}
+            />
           </ErrorBoundary>
         </div>
 

@@ -118,6 +118,34 @@ the text and summarizes it. `show_diff` gives you the actual visual split instea
 diff *next to the rendered PDF*, use the browser History panel; for a terminal split, `git diff`
 with [delta](https://github.com/dandavison/delta) configured.)
 
+## Section history
+
+Every clean PDF render creates a source checkpoint. Open **History → Sections** to browse the
+paper as a section tree rather than as a list of whole-document commits. Selecting an
+Introduction, subsection, or appendix shows only the versions in which that part changed.
+The tree follows the rendered main document and its `\input`/`\include` files; unrelated old
+drafts or supplements kept in the same folder are not mixed into it.
+
+- **Text** compares the heading and prose owned directly by that section, without noise from
+  edited subsections. **+ subsections** compares its complete subtree.
+- **View PDF** opens the exact PDF saved when that source checkpoint rendered; **Back to latest**
+  returns to the live preview.
+- **Restore section** replaces only that section and its subsections. MagicTeX checkpoints the
+  current project first, so the restore itself is reversible. Use **Whole project** when you
+  really want a full checkpoint diff or restore.
+
+Identity is semantic rather than tied to line numbers. A stable `\label{...}` is the strongest
+signal, but it is not required: titles, direct prose, hierarchy, neighbouring headings, file,
+and order are combined to follow renamed or moved sections. A **?** badge marks a low-confidence
+fuzzy match so you know to inspect that transition rather than trust it silently.
+
+The source history lives in the hidden Git ref described below. Exact PDFs live beside it at
+`.latex-preview/renders/<checkpoint>.pdf`; they are excluded from Git because binary PDF deltas
+grow quickly. Both are inside the project folder for plain-folder projects, so Dropbox can carry
+them across machines. Let Dropbox finish syncing before opening the same project elsewhere, and
+avoid editing it concurrently on two machines; a normal Git remote is safer for concurrent source
+work.
+
 ## Getting your paper into Overleaf
 
 There are three ways, depending on your setup. The tool can't push to Overleaf *for* you without
@@ -175,3 +203,5 @@ is an approximation.
   MagicTeX keeps that ref in a repository of its own at `.latex-preview/history.git` inside the
   project — so the history moves, copies and is deleted with the folder, and `git` run there still
   reports no repository.
+- Historical PDFs are stored separately under `.latex-preview/renders/`, keyed by checkpoint SHA,
+  and are not added to either your Git history or MagicTeX's hidden source history.

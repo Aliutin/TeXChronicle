@@ -98,9 +98,19 @@ const isRepo = (dir: string): Promise<boolean> => exists(join(dir, 'HEAD'));
  * Scoped to the one directory we create, so whether comments.json gets tracked
  * stays the author's decision.
  */
-async function ignoreShadow(root: string): Promise<void> {
+async function ignoreToolStorage(root: string): Promise<void> {
   try {
-    await writeFile(join(root, TOOL_DIR, '.gitignore'), `${SHADOW}/\n`, { encoding: 'utf8', flag: 'wx' });
+    const path = join(root, TOOL_DIR, '.gitignore');
+    await mkdir(join(root, TOOL_DIR), { recursive: true });
+    const existing = await readFile(path, 'utf8').catch(() => '');
+    const lines = new Set(existing.split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
+    lines.add(`${SHADOW}/`);
+    // Exact render PDFs are synchronised with the project, but are binary build
+    // artifacts rather than source. Keep them out of both the user's ordinary
+    // Git repository and MagicTeX's hidden checkpoint trees.
+    lines.add('renders/');
+    const next = [...lines].join('\n') + '\n';
+    if (next !== existing) await writeFile(path, next, 'utf8');
   } catch {
     /* already there, or unwritable — neither is worth failing history over */
   }
@@ -205,6 +215,7 @@ export async function historyRepo(root: string): Promise<HistoryRepo> {
   // ref inside it, so they survive a clone and live beside the author's own
   // history rather than in a directory they'd never find.
   if ((await gitOrNull(root, ['rev-parse', '--git-dir'])) !== null) {
+    await ignoreToolStorage(root);
     const resolved: HistoryRepo = { mode: 'project', env: { ...IDENTITY } };
     cache.set(root, resolved);
     return resolved;
@@ -215,12 +226,15 @@ export async function historyRepo(root: string): Promise<HistoryRepo> {
   try {
     if (!(await isRepo(dir))) {
       await mkdir(join(root, TOOL_DIR), { recursive: true });
-      await ignoreShadow(root);
+      await ignoreToolStorage(root);
       // Never fatal: failing to bring an old timeline forward costs the author
       // that timeline, but failing the compile over it costs them more.
       await adoptLegacyCache(root, dir).catch(() => {});
     }
     await mkdir(dir, { recursive: true });
+    // Existing shadow repos predate render artifacts; upgrade their ignore file
+    // too, not only newly-created stores.
+    await ignoreToolStorage(root);
     // `git init` is idempotent, but checking first keeps a re-init out of the
     // common path and makes a corrupted directory visible as a failure here
     // rather than as a confusing error on the first commit.

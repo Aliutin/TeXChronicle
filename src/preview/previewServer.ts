@@ -16,6 +16,8 @@ import { hostPageHtml } from '../engine/hostPage.js';
 import { viewerPageHtml } from './viewerPage.js';
 import { diffViewHtml } from './diffViewPage.js';
 import { canTrackHistory, historyStatus, listCheckpoints, getCheckpointDiff, getWorkingDiff, restoreCheckpoint, restoreFile } from '../git/checkpoints.js';
+import { listSectionHistory, getSectionDiff, restoreSection } from '../git/sectionHistory.js';
+import { readRenderArtifact } from '../git/renderArtifacts.js';
 import { listTextFiles, readTextFile, writeTextFile, listTree, createTextFile, createDir, renameEntry, deleteEntry, writeUpload } from './filesApi.js';
 import { suppressNextChange } from '../watch/fileWatcher.js';
 import { listComments, addComment, updateComment, deleteComment, addReply } from './commentsStore.js';
@@ -168,6 +170,45 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
         const diff = await getCheckpointDiff(getProjectRoot(), sha);
         res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', ...ISOLATION_HEADERS });
         res.end(diff); return;
+      } catch (e) {
+        res.writeHead(400, ISOLATION_HEADERS).end(String((e as Error).message)); return;
+      }
+    }
+    // Semantic history: the same checkpoint chain, projected into section and
+    // subsection identities. No separate source archive is created.
+    if (pathname === '/git/sections') {
+      try { return json(res, await listSectionHistory(getProjectRoot())); }
+      catch (e) { res.writeHead(500, ISOLATION_HEADERS).end(String((e as Error).message)); return; }
+    }
+    if (pathname === '/git/section-diff') {
+      const sha = reqUrl.searchParams.get('sha') ?? '';
+      const section = reqUrl.searchParams.get('section') ?? '';
+      const subtree = reqUrl.searchParams.get('subtree') === '1';
+      try { return json(res, await getSectionDiff(getProjectRoot(), section, sha, subtree)); }
+      catch (e) { res.writeHead(400, ISOLATION_HEADERS).end(String((e as Error).message)); return; }
+    }
+    if (pathname === '/git/restore-section' && req.method === 'POST') {
+      const sha = reqUrl.searchParams.get('sha') ?? '';
+      const section = reqUrl.searchParams.get('section') ?? '';
+      try {
+        const restored = await restoreSection(getProjectRoot(), section, sha);
+        const { requestCompile } = await import('../coordinator.js');
+        requestCompile().catch(() => {});
+        return json(res, { ok: true, ...restored });
+      } catch (e) {
+        res.writeHead(400, ISOLATION_HEADERS).end(String((e as Error).message)); return;
+      }
+    }
+    // Exact historical render for a checkpoint. Older checkpoints created
+    // before render artifacts were introduced simply return 404; their source
+    // history and diffs remain available.
+    if (pathname === '/git/render') {
+      const sha = reqUrl.searchParams.get('sha') ?? '';
+      try {
+        const pdf = await readRenderArtifact(getProjectRoot(), sha);
+        if (!pdf) { res.writeHead(404, ISOLATION_HEADERS).end('no stored PDF for this checkpoint'); return; }
+        res.writeHead(200, { 'Content-Type': 'application/pdf', 'Cache-Control': 'no-store', ...ISOLATION_HEADERS });
+        res.end(pdf); return;
       } catch (e) {
         res.writeHead(400, ISOLATION_HEADERS).end(String((e as Error).message)); return;
       }

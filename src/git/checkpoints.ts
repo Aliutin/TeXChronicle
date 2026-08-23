@@ -64,7 +64,7 @@ export interface Checkpoint {
  * or a stale index.lock meant an hour of uncommitted work was destroyed with
  * nothing to go back to, against an explicit promise on screen that it was safe.
  */
-export type NotCreated = 'no-history' | 'unchanged' | 'failed';
+export type NotCreated = 'no-history' | 'unchanged' | 'changed-during-compile' | 'failed';
 
 export interface CheckpointResult {
   created: boolean;
@@ -73,41 +73,58 @@ export interface CheckpointResult {
   error?: string;
 }
 
-async function doCreateCheckpoint(root: string): Promise<CheckpointResult> {
-  const { env: ENV, mode } = await historyRepo(root);
-  if (mode !== 'project' && mode !== 'shadow') return { created: false, reason: 'no-history' };
+export interface CheckpointPreparation {
+  /** Git tree captured immediately before the compiler starts reading files. */
+  tree?: string;
+  reason?: 'no-history' | 'failed';
+  error?: string;
+}
 
-  // Temp index OUTSIDE the repo, fresh each time — so the user's real index is
-  // untouched and the index file itself never lands in a snapshot.
+/** Hash the working tree through a private index, without changing a ref. The
+ * resulting tree object is immutable even if an editor saves again later. */
+async function writeCurrentTree(root: string, ENV: NodeJS.ProcessEnv): Promise<string> {
   const idx = join(tmpdir(), `latex-ckpt-${randomBytes(6).toString('hex')}.index`);
   const env = { ...ENV, GIT_INDEX_FILE: idx };
   try {
-    // MagicTeX's own state and Claude Code's config are not the user's paper, and
-    // recording them is what let restore roll back comments and .claude/ behind
-    // the reader's back: EXCLUDE_TOOL only ever filtered what `git log` and
-    // `git diff` SHOWED — the tree always held them.
-    await git(root, ['add', '-A', ...EXCLUDE_TOOL], env); // respects .gitignore -> build artifacts excluded
-    const tree = (await git(root, ['write-tree'], env)).trim();
+    await git(root, ['add', '-A', ...EXCLUDE_TOOL], env);
+    return (await git(root, ['write-tree'], env)).trim();
+  } finally {
+    await rm(idx, { force: true }).catch(() => {});
+  }
+}
 
-    const prev = (await gitOrNull(root, ['rev-parse', '--verify', '-q', REF], ENV))?.trim() || '';
-    if (prev) {
-      const prevTree = (await git(root, ['rev-parse', `${prev}^{tree}`], ENV)).trim();
-      if (tree === prevTree) return { created: false, reason: 'unchanged' }; // already recorded
-    }
+/** Advance the hidden history ref to an already-captured tree. Caller holds the lock. */
+async function commitTreeUnlocked(root: string, ENV: NodeJS.ProcessEnv, tree: string): Promise<CheckpointResult> {
+  const prev = (await gitOrNull(root, ['rev-parse', '--verify', '-q', REF], ENV))?.trim() || '';
+  if (prev) {
+    const prevTree = (await git(root, ['rev-parse', `${prev}^{tree}`], ENV)).trim();
+    if (tree === prevTree) return { created: false, reason: 'unchanged', sha: prev };
+  }
 
-    const msg = `checkpoint ${new Date().toISOString()}`;
-    const commitArgs = prev
-      ? ['commit-tree', tree, '-p', prev, '-m', msg]
-      : ['commit-tree', tree, '-m', msg];
-    const sha = (await git(root, commitArgs, ENV)).trim();
-    await git(root, ['update-ref', REF, sha], ENV);
-    return { created: true, sha };
+  const msg = `checkpoint ${new Date().toISOString()}`;
+  const commitArgs = prev
+    ? ['commit-tree', tree, '-p', prev, '-m', msg]
+    : ['commit-tree', tree, '-m', msg];
+  const sha = (await git(root, commitArgs, ENV)).trim();
+  await git(root, ['update-ref', REF, sha], ENV);
+  return { created: true, sha };
+}
+
+/** Internal unlocked form for compound reversible operations. Callers must hold
+ *  `withLock(root, ...)`; ordinary checkpoint creation must use the public
+ *  locked wrapper below. */
+export async function createCheckpointUnlocked(root: string): Promise<CheckpointResult> {
+  const { env: ENV, mode } = await historyRepo(root);
+  if (mode !== 'project' && mode !== 'shadow') return { created: false, reason: 'no-history' };
+  try {
+    // MagicTeX's own state and Claude Code's config are not the user's paper.
+    // writeCurrentTree excludes both while still respecting the author's normal
+    // .gitignore, and always uses a private index outside the repository.
+    return await commitTreeUnlocked(root, ENV, await writeCurrentTree(root, ENV));
   } catch (e) {
     // Still never breaks a compile — but the reason travels now, so a caller
     // that is about to overwrite the working tree can refuse.
     return { created: false, reason: 'failed', error: String((e as Error).message ?? e) };
-  } finally {
-    await rm(idx, { force: true }).catch(() => {});
   }
 }
 
@@ -117,7 +134,44 @@ async function doCreateCheckpoint(root: string): Promise<CheckpointResult> {
  * since the last checkpoint. Never throws for expected conditions.
  */
 export async function createCheckpoint(root: string): Promise<CheckpointResult> {
-  return withLock(root, () => doCreateCheckpoint(root));
+  return withLock(root, () => createCheckpointUnlocked(root));
+}
+
+/**
+ * Capture the source tree immediately before a compile. This writes Git objects
+ * but no commit/ref, so a failed compile never appears in History.
+ */
+export async function prepareCheckpoint(root: string): Promise<CheckpointPreparation> {
+  return withLock(root, async () => {
+    const { env: ENV, mode } = await historyRepo(root);
+    if (mode !== 'project' && mode !== 'shadow') return { reason: 'no-history' };
+    try {
+      return { tree: await writeCurrentTree(root, ENV) };
+    } catch (e) {
+      return { reason: 'failed', error: String((e as Error).message ?? e) };
+    }
+  });
+}
+
+/**
+ * Commit a pre-compile tree only if the working tree is still identical after
+ * compilation. The resulting SHA can therefore label the produced PDF without
+ * a source/PDF race. If a save happened mid-compile, the watcher will compile
+ * that newer tree next and this stale render receives no misleading artifact.
+ */
+export async function createCheckpointFromPrepared(root: string, preparedTree: string): Promise<CheckpointResult> {
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(preparedTree)) return { created: false, reason: 'failed', error: 'invalid prepared tree' };
+  return withLock(root, async () => {
+    const { env: ENV, mode } = await historyRepo(root);
+    if (mode !== 'project' && mode !== 'shadow') return { created: false, reason: 'no-history' };
+    try {
+      const currentTree = await writeCurrentTree(root, ENV);
+      if (currentTree !== preparedTree) return { created: false, reason: 'changed-during-compile' };
+      return await commitTreeUnlocked(root, ENV, preparedTree);
+    } catch (e) {
+      return { created: false, reason: 'failed', error: String((e as Error).message ?? e) };
+    }
+  });
 }
 
 const SHORTSTAT_RE = /(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?/;
@@ -198,7 +252,7 @@ export async function restoreCheckpoint(root: string, sha: string): Promise<void
     // it is not — so refuse rather than overwrite the working tree and discard
     // whatever was in it. 'unchanged' is fine: the previous checkpoint already
     // holds exactly this state.
-    const snapshot = await doCreateCheckpoint(root);
+    const snapshot = await createCheckpointUnlocked(root);
     if (!snapshot.created && snapshot.reason !== 'unchanged') {
       throw new Error(
         `Refusing to restore: MagicTeX could not snapshot your current files first, so this could not be undone (${snapshot.error ?? snapshot.reason}). Nothing has been changed.`,
@@ -248,7 +302,7 @@ export async function restoreFile(root: string, sha: string, relPath: string): P
     // it is not — so refuse rather than overwrite the working tree and discard
     // whatever was in it. 'unchanged' is fine: the previous checkpoint already
     // holds exactly this state.
-    const snapshot = await doCreateCheckpoint(root);
+    const snapshot = await createCheckpointUnlocked(root);
     if (!snapshot.created && snapshot.reason !== 'unchanged') {
       throw new Error(
         `Refusing to restore: MagicTeX could not snapshot your current files first, so this could not be undone (${snapshot.error ?? snapshot.reason}). Nothing has been changed.`,

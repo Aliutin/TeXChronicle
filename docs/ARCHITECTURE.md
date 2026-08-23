@@ -40,7 +40,8 @@ open is the React workspace with a lightweight `pdf.js` viewer — no WASM in it
   page + WASM assets to the hidden browser; the workspace (`/app`, from `ui/dist`)
   or the legacy inline viewer (`src/preview/viewerPage.ts`, only if `ui/dist` is
   missing); `/api/*` (files, comments, upload); `/git/*` (checkpoints, diff,
-  status); `/export.zip` + `/overleaf/link`. All responses carry COOP/COEP headers
+  status, semantic sections, section diffs/restores, historical PDFs); `/export.zip` +
+  `/overleaf/link`. All responses carry COOP/COEP headers
   (the engine's Worker/SharedArrayBuffer require cross-origin isolation).
 - `src/preview/filesApi.ts` — the file tree + read/write/rename/delete/upload
   behind `/api/*`, path-guarded against traversal.
@@ -71,12 +72,24 @@ open is the React workspace with a lightweight `pdf.js` viewer — no WASM in it
   operation (`createCheckpoint`, `restoreCheckpoint`, `restoreFile`) runs under
   `lock.ts`. Diffs and the checkpoint list exclude `.latex-preview/` and `.claude/`
   (git exclude pathspec) — neither is part of the user's paper.
+- `src/latex/sections.ts` — offset-preserving LaTeX section parser and semantic graph builder.
+  It separates a section's direct text from its complete subtree, then matches identities between
+  checkpoints using labels plus fuzzy title/content/hierarchy/neighbour/order evidence.
+- `src/git/sectionHistory.ts` — projects the hidden checkpoint chain into per-section timelines;
+  follows the main file recorded with each render through its `\input`/`\include` graph (so old
+  standalone drafts in the same folder do not pollute the tree), produces section-only diffs, and
+  performs reversible subtree restores without changing unrelated parts of the document.
+- `src/git/renderArtifacts.ts` — stores and validates the exact successful PDF for each source
+  checkpoint under `.latex-preview/renders/`, outside Git's binary history but inside the project
+  for folder synchronization.
 - `src/git/remote.ts` — parses the GitHub remote (if any) to build the
   Open-in-Overleaf link for public repos.
 - `src/coordinator.ts` — serializes all compiles **within one process** (tool +
-  watcher) through one promise chain; after each successful compile, creates a git
-  checkpoint. Cross-process serialization for shared state is `lock.ts`'s job, not
-  this — the coordinator only owns the WASM engine, which is itself per-process.
+  watcher) through one promise chain. It captures a Git tree before compilation and,
+  after a clean result, commits and binds the PDF only if the working tree still
+  matches; a save during compilation therefore cannot mislabel a stale PDF. Cross-process
+  serialization for shared state is `lock.ts`'s job, not this — the coordinator only
+  owns the WASM engine, which is itself per-process.
 - `src/watch/fileWatcher.ts` — chokidar watcher for passive live-reload.
 - `src/session.ts` — the current project root, shared between the coordinator
   (which sets it) and the git/comments endpoints (which read it), without an
@@ -85,13 +98,13 @@ open is the React workspace with a lightweight `pdf.js` viewer — no WASM in it
 ## Compile flow
 
 ```
-render_preview ─┐                          ┌─ setLatestPdf ─▶ WS "reload" ─▶ workspace
-                ├─▶ coordinator (serial) ──▶│
-file save ──────┘        compileProject     └─ compile-error ─▶ WS ─▶ workspace banner
-                          │
-                          ├─ resolveMainFile + collectProjectFiles
-                          └─ browserHost.compile → page.evaluate(window.__compile)
-                                                    → BusyTexRunner (reused) → PDF
+render_preview ─┐                         ┌─ clean + same tree ─▶ checkpoint + exact PDF
+                ├─▶ coordinator (serial) ┼─ setLatestPdf ─▶ WS "reload" ─▶ workspace
+file save ──────┘       pre-compile tree  └─ compile-error ─▶ WS ─▶ workspace banner
+                         │
+                         ├─ resolveMainFile + collectProjectFiles
+                         └─ browserHost.compile → page.evaluate(window.__compile)
+                                                   → BusyTexRunner (reused) → PDF
 ```
 
 ## The workspace UI (`ui/`)
@@ -114,9 +127,10 @@ falls back to the legacy inline `/viewer` when `ui/dist` is missing (fresh clone
   without recompiling, Ctrl+S / Save / Recompile rebuild on demand.
 - `ui/src/components/FileTree.tsx` — nested Overleaf-style file tree: new/rename/delete,
   figure upload, resizable height.
-- `ui/src/components/HistoryPanel.tsx` + `DiffView.tsx` — checkpoint timeline; a hand-rolled
-  unified-diff renderer (not diff2html) with collapsible per-file sections; per-checkpoint
-  and per-file **restore** buttons (`POST /git/restore`, `/git/restore-file`).
+- `ui/src/components/HistoryPanel.tsx` + `DiffView.tsx` — semantic section tree and version graph
+  by default, with direct-text/subtree diffs, historical-PDF links, confidence markers, and
+  reversible section restore. The original whole-project checkpoint timeline remains available,
+  including per-checkpoint and per-file restore.
 - `ui/src/components/CommentsPanel.tsx` — suggested/accepted/resolved cards, the Auto-accept
   (copilot) toggle, jump-to-highlight.
 - Comment MCP loop: `check_comments` returns accepted comments as structured instructions;

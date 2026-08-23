@@ -1,49 +1,131 @@
-// Left-panel History tab: checkpoint timeline (hidden git ref) + colorized diff.
-// Reuses the existing /git/* endpoints; diff rendered by our own DiffView.
-import { useEffect, useState } from 'react';
-import { fetchCheckpoints, fetchDiff, fetchGitStatus, restoreCheckpoint, restoreFile, type Checkpoint, type HistoryMode } from '../api';
+// History has two projections over the same hidden Git checkpoint chain:
+// semantic section timelines (the default) and the original whole-project log.
+import { useEffect, useMemo, useState } from 'react';
+import {
+  fetchCheckpoints,
+  fetchDiff,
+  fetchGitStatus,
+  fetchSectionDiff,
+  fetchSectionHistory,
+  restoreCheckpoint,
+  restoreFile,
+  restoreSection,
+  type Checkpoint,
+  type HistoryMode,
+  type SectionHistoryPayload,
+  type SectionVersion,
+} from '../api';
 import { DiffView } from './DiffView';
 
-export function HistoryPanel({ reloadTick }: { reloadTick: number }) {
+type HistoryView = 'sections' | 'project';
+
+const fmt = (iso: string) => {
+  try { return new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
+  catch { return iso; }
+};
+
+const changeText = (version: SectionVersion): string => version.changes.map((change) => ({
+  created: 'created', edited: 'text', renamed: 'renamed', moved: 'moved', reordered: 'reordered', structure: 'structure', descendant: 'subsection',
+}[change])).join(' · ');
+
+export function HistoryPanel({
+  reloadTick,
+  onPreviewVersion,
+}: {
+  reloadTick: number;
+  onPreviewVersion?: (sha: string, title: string) => void;
+}) {
   const [isRepo, setIsRepo] = useState<boolean | null>(null);
   const [mode, setMode] = useState<HistoryMode | null>(null);
+  const [view, setView] = useState<HistoryView>('sections');
   const [items, setItems] = useState<Checkpoint[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [diff, setDiff] = useState('');
+  const [semantic, setSemantic] = useState<SectionHistoryPayload | null>(null);
+  const [semanticError, setSemanticError] = useState('');
+  const [selectedSection, setSelectedSection] = useState<string | null>(null);
+  const [selectedVersion, setSelectedVersion] = useState<string | null>(null);
+  const [sectionDiff, setSectionDiff] = useState('');
+  const [includeSubsections, setIncludeSubsections] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const restore = async (sha: string) => {
-    if (!confirm('Restore the project to this version? Your current text is snapshotted first (a new checkpoint), so you can undo this.')) return;
+  const section = useMemo(
+    () => semantic?.sections.find((candidate) => candidate.id === selectedSection) ?? null,
+    [semantic, selectedSection],
+  );
+  const version = useMemo(
+    () => section?.versions.find((candidate) => candidate.sha === selectedVersion) ?? null,
+    [section, selectedVersion],
+  );
+
+  const restoreProject = async (sha: string) => {
+    if (!confirm('Restore the project to this version? Your current text is snapshotted first, so you can undo this.')) return;
     setBusy(true);
-    await restoreCheckpoint(sha);
+    const error = await restoreCheckpoint(sha);
     setBusy(false);
-    // the recompile fires a reload → the effect above refreshes the checkpoint list
+    if (error) alert(error);
   };
 
-  useEffect(() => { fetchGitStatus().then((s) => { setIsRepo(s.isRepo); setMode(s.mode); }); }, []);
+  const restoreSemantic = async () => {
+    if (!section || !version) return;
+    if (!confirm(`Restore “${section.title}” and its subsections to ${fmt(version.time)}? Your current files are snapshotted first, so this is reversible.`)) return;
+    setBusy(true);
+    const error = await restoreSection(section.id, version.sha);
+    setBusy(false);
+    if (error) alert(error);
+  };
+
+  useEffect(() => { fetchGitStatus().then((status) => { setIsRepo(status.isRepo); setMode(status.mode); }); }, []);
 
   useEffect(() => {
     if (isRepo === false) return;
+    let cancelled = false;
     fetchCheckpoints().then((list) => {
+      if (cancelled) return;
       setItems(list);
-      if (list.length && !list.some((c) => c.sha === selected)) setSelected(list[0].sha);
+      setSelected((current) => list.some((checkpoint) => checkpoint.sha === current) ? current : list[0]?.sha ?? null);
     });
+    setSemanticError('');
+    fetchSectionHistory().then((history) => {
+      if (cancelled) return;
+      setSemantic(history);
+      setSelectedSection((current) => history.sections.some((candidate) => candidate.id === current)
+        ? current
+        : history.sections.find((candidate) => candidate.present)?.id ?? history.sections[0]?.id ?? null);
+    }).catch((error) => { if (!cancelled) setSemanticError(String(error?.message ?? error)); });
+    return () => { cancelled = true; };
   }, [reloadTick, isRepo]);
 
   useEffect(() => {
-    if (!selected) { setDiff(''); return; }
+    if (!section?.versions.length) { setSelectedVersion(null); return; }
+    setSelectedVersion((current) => section.versions.some((candidate) => candidate.sha === current)
+      ? current
+      : section.versions[0].sha);
+  }, [section]);
+
+  useEffect(() => {
+    if (view !== 'project' || !selected) { if (view === 'project') setDiff(''); return; }
     fetchDiff(selected).then(setDiff);
-  }, [selected]);
+  }, [selected, view]);
+
+  useEffect(() => {
+    if (view !== 'sections' || !selectedSection || !selectedVersion) {
+      if (view === 'sections') setSectionDiff('');
+      return;
+    }
+    let cancelled = false;
+    fetchSectionDiff(selectedSection, selectedVersion, includeSubsections)
+      .then((result) => { if (!cancelled) setSectionDiff(result.diff); })
+      .catch((error) => { if (!cancelled) setSectionDiff(`diff --git a/section b/section\n@@ -1 +1 @@\n-${String(error?.message ?? error)}\n`); });
+    return () => { cancelled = true; };
+  }, [selectedSection, selectedVersion, includeSubsections, view]);
 
   if (isRepo === false) {
-    // A project that isn't a git repo now gets a repo of ours inside it, so the
-    // only way to reach this is a missing binary. Saying "not a git repository"
-    // here sent people off to run `git init`, which wouldn't help.
     return (
       <div className="panel-hint">
         History needs <code>git</code>, and none was found on your PATH. Install it
         from <a href="https://git-scm.com/" target="_blank" rel="noreferrer">git-scm.com</a> and
-        restart — no account and no remote are involved; the history stays on this machine.
+        restart. No account or remote is required.
       </div>
     );
   }
@@ -51,59 +133,122 @@ export function HistoryPanel({ reloadTick }: { reloadTick: number }) {
     return <div className="panel-hint">No checkpoints yet. One is saved automatically after each successful compile.</div>;
   }
 
-  const fmt = (iso: string) => {
-    try { return new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
-    catch { return iso; }
-  };
+  const baseLevel = semantic?.sections.filter((candidate) => candidate.present).reduce((min, candidate) => Math.min(min, candidate.level), 9) ?? 0;
 
   return (
     <div className="history">
-      {/* Say where it is. Someone whose folder isn't a repo gets history that
-          works, then finds `git log` empty with nothing to go on. This is not a
-          warning — the feature is working — so it sits quietly above the
-          timeline rather than as a banner.
-
-          It used to say the history lived in MagicTeX's cache and that nothing
-          was added to your files. Both stopped being true when history moved
-          into the project, and a note about where your work is kept is the last
-          place to leave a stale claim. */}
       {mode === 'shadow' && (
         <div className="history-note">
-          This folder isn't a git repository, so MagicTeX keeps its own history
-          in <code>.latex-preview/history.git</code> beside your files. Your own <code>git</code> is
-          untouched, nothing is pushed anywhere, and the history moves, copies and is deleted
-          with the folder.
+          Source history lives in <code>.latex-preview/history.git</code>; exact rendered PDFs live
+          in <code>.latex-preview/renders</code>. Both move and Dropbox-sync with this folder.
         </div>
       )}
-      <div className="history-list">
-        {items.map((c, i) => (
-          <div key={c.sha} className={`ck ${c.sha === selected ? 'sel' : ''}`} onClick={() => setSelected(c.sha)}>
-            <div className="ck-t">
-              {fmt(c.time)}
-              {i > 0 && (
-                <button className="ck-restore" disabled={busy} title="Restore the project to this version (reversible)"
-                        onClick={(e) => { e.stopPropagation(); void restore(c.sha); }}>
-                  ↩ restore
-                </button>
-              )}
-            </div>
-            <div className="ck-s">
-              {c.filesChanged} file{c.filesChanged === 1 ? '' : 's'}
-              {c.insertions > 0 && <span className="add"> +{c.insertions}</span>}
-              {c.deletions > 0 && <span className="del"> −{c.deletions}</span>}
-            </div>
-          </div>
-        ))}
+      <div className="history-mode seg">
+        <button className={view === 'sections' ? 'on' : ''} onClick={() => setView('sections')}>Sections</button>
+        <button className={view === 'project' ? 'on' : ''} onClick={() => setView('project')}>Whole project</button>
       </div>
-      {diff ? (
-        <DiffView
-          diff={diff}
-          onRevertFile={selected ? async (file) => {
-            if (!confirm(`Revert "${file}" to this version? Only this file changes; current state is snapshotted first (reversible).`)) return;
-            setBusy(true); await restoreFile(selected, file); setBusy(false);
-          } : undefined}
-        />
-      ) : <div className="panel-hint">Select a checkpoint to see its diff.</div>}
+
+      {view === 'sections' ? (
+        <>
+          {semanticError && <div className="panel-hint load-error">{semanticError}</div>}
+          {!semanticError && semantic && !semantic.sections.length && (
+            <div className="panel-hint">No <code>\section</code> or <code>\subsection</code> headings were found in the checkpoint history.</div>
+          )}
+          <div className="section-tree">
+            {semantic?.sections.map((candidate) => (
+              <button
+                key={candidate.id}
+                className={`section-row ${candidate.id === selectedSection ? 'sel' : ''} ${candidate.present ? '' : 'gone'}`}
+                style={{ paddingLeft: 10 + Math.max(0, candidate.level - baseLevel) * 15 }}
+                onClick={() => setSelectedSection(candidate.id)}
+                title={`${candidate.path}${candidate.label ? ` · ${candidate.label}` : ''}`}
+              >
+                <span className="section-kind">{candidate.appendix ? 'A' : candidate.command === 'section' ? '§' : '›'}</span>
+                <span className="section-title">{candidate.title}</span>
+                <span className="section-count">{candidate.versions.length}</span>
+              </button>
+            ))}
+          </div>
+
+          {section && (
+            <div className="section-history-head">
+              <div className="section-heading" title={section.path}>{section.title}</div>
+              <div className="scope-toggle seg" title="Direct text ignores child subsection moves; subtree includes them">
+                <button className={!includeSubsections ? 'on' : ''} onClick={() => setIncludeSubsections(false)}>Text</button>
+                <button className={includeSubsections ? 'on' : ''} onClick={() => setIncludeSubsections(true)}>+ subsections</button>
+              </div>
+            </div>
+          )}
+
+          <div className="section-versions">
+            {section?.versions.map((candidate, index) => (
+              <div
+                key={candidate.versionId}
+                className={`section-version ${candidate.sha === selectedVersion ? 'sel' : ''}`}
+                onClick={() => {
+                  setSelectedVersion(candidate.sha);
+                  if (candidate.hasPdf) onPreviewVersion?.(candidate.sha, candidate.title);
+                }}
+              >
+                <span className="version-node" aria-hidden="true" />
+                <div className="version-main">
+                  <div className="version-time">{fmt(candidate.time)}{index === 0 && section.present ? <span className="current-tag">current</span> : null}</div>
+                  <div className="version-change">{changeText(candidate) || 'checkpoint'} · {candidate.path}:{candidate.startLine}</div>
+                </div>
+                {candidate.confidence === 'low' && <span className="confidence-low" title={`Fuzzy identity match score ${candidate.matchScore.toFixed(2)}`}>?</span>}
+                {candidate.hasPdf && <span className="pdf-badge" title="Exact PDF is available">PDF</span>}
+              </div>
+            ))}
+          </div>
+
+          {version && (
+            <div className="section-actions">
+              <button disabled={!version.hasPdf} onClick={() => onPreviewVersion?.(version.sha, version.title)} title={version.hasPdf ? 'Show the exact PDF produced for this version' : 'This checkpoint predates stored PDF artifacts'}>
+                View PDF
+              </button>
+              <button disabled={busy || Boolean(section?.present && version.versionId === section.versions[0]?.versionId)} onClick={() => void restoreSemantic()} title="Restore only this section and its subsections; current state is checkpointed first">
+                ↩ restore section
+              </button>
+            </div>
+          )}
+          {sectionDiff ? <DiffView diff={sectionDiff} /> : <div className="panel-hint">Select a section version to see its own changes.</div>}
+        </>
+      ) : (
+        <>
+          <div className="history-list">
+            {items.map((checkpoint, index) => (
+              <div key={checkpoint.sha} className={`ck ${checkpoint.sha === selected ? 'sel' : ''}`} onClick={() => setSelected(checkpoint.sha)}>
+                <div className="ck-t">
+                  {fmt(checkpoint.time)}
+                  {index > 0 && (
+                    <button className="ck-restore" disabled={busy} title="Restore the project to this version (reversible)"
+                            onClick={(event) => { event.stopPropagation(); void restoreProject(checkpoint.sha); }}>
+                      ↩ restore
+                    </button>
+                  )}
+                </div>
+                <div className="ck-s">
+                  {checkpoint.filesChanged} file{checkpoint.filesChanged === 1 ? '' : 's'}
+                  {checkpoint.insertions > 0 && <span className="add"> +{checkpoint.insertions}</span>}
+                  {checkpoint.deletions > 0 && <span className="del"> −{checkpoint.deletions}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+          {diff ? (
+            <DiffView
+              diff={diff}
+              onRevertFile={selected ? async (file) => {
+                if (!confirm(`Revert “${file}” to this version? Only this file changes; current state is snapshotted first.`)) return;
+                setBusy(true);
+                const error = await restoreFile(selected, file);
+                setBusy(false);
+                if (error) alert(error);
+              } : undefined}
+            />
+          ) : <div className="panel-hint">Select a checkpoint to see its diff.</div>}
+        </>
+      )}
     </div>
   );
 }

@@ -4,7 +4,8 @@
 // each compile always reads the latest files off disk.
 import { compileProject, type CompileProjectResult, type Engine, type Backend } from './project/compileProject.js';
 import { getPreview } from './engine/browserHost.js';
-import { createCheckpoint } from './git/checkpoints.js';
+import { createCheckpoint, createCheckpointFromPrepared, prepareCheckpoint } from './git/checkpoints.js';
+import { saveRenderArtifact } from './git/renderArtifacts.js';
 import { setProjectRoot } from './session.js';
 
 interface Config {
@@ -34,6 +35,13 @@ async function doCompile(): Promise<CompileProjectResult> {
   if (!config) throw new Error('No project configured yet — call render_preview first.');
   const preview = await getPreview();
   preview.broadcast({ type: 'compiling' });
+  // Capture an immutable source tree before either compiler starts reading.
+  // We do not advance History yet: failed compiles should not become versions.
+  const prepared = await prepareCheckpoint(config.projectRoot).catch((error) => ({
+    tree: undefined,
+    reason: 'failed' as const,
+    error: String((error as Error)?.message ?? error),
+  }));
   const result = await compileProject(config);
   const clean = result.success && (!result.verdict || result.verdict.errors.length === 0);
 
@@ -55,7 +63,21 @@ async function doCompile(): Promise<CompileProjectResult> {
       // Only clean runs earn a checkpoint: History exists so you can return to
       // a state that worked, and snapshotting source that compiles with errors
       // would dilute exactly that promise.
-      if (clean) await createCheckpoint(config.projectRoot);
+      if (clean) {
+        const checkpoint = prepared.tree
+          ? await createCheckpointFromPrepared(config.projectRoot, prepared.tree)
+          : await createCheckpoint(config.projectRoot);
+        if (checkpoint.sha && prepared.tree) {
+          // A render is an immutable view of one source checkpoint. PDF bytes
+          // live outside Git (binary history grows quickly) but beside the
+          // project, keyed by the checkpoint SHA, so Dropbox carries both.
+          await saveRenderArtifact(config.projectRoot, checkpoint.sha, result.pdf, {
+            mainFile: result.mainFile,
+            engine: result.engine,
+            backend: result.backend,
+          }).catch(() => {}); // history/artifact failure never turns a good compile into a bad one
+        }
+      }
       preview.setLatestPdf(result.pdf, result.mainFile);
       lastPublishWasClean = clean;
     }

@@ -61,10 +61,13 @@ anchored annotations):
   own editor: any save triggers the same live loop.
 - **Live reload.** A file watcher recompiles on every save — Claude's edits, the
   built-in editor's, or your external editor's.
-- **Change history.** Each successful compile is auto-snapshotted to a **hidden
-  git ref** (`refs/latex-preview/checkpoints`) — never touching your branches,
-  `git log`, or working tree. The History tab shows the timeline and each
-  checkpoint's colorized diff beside the PDF.
+- **Section-aware change history.** Each successful compile is auto-snapshotted
+  to a **hidden git ref** (`refs/latex-preview/checkpoints`) — never touching your
+  branches, `git log`, or working tree. History follows every section and
+  subsection across edits, renames, and moves using labels plus fuzzy matching.
+  Browse its own timeline, compare only its text (or its whole subtree), restore
+  that part without rolling back the rest of the paper, and reopen the exact PDF
+  produced at that checkpoint. A whole-project timeline remains available too.
 - **Get to Overleaf.** **Download PDF**, **Export .zip** (clean build-inputs
   bundle), and a one-click **Open in Overleaf** link for public GitHub repos;
   Premium Git-bridge sync is a documented `git push`. See [`docs/USER-GUIDE.md`](docs/USER-GUIDE.md).

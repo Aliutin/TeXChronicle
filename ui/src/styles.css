@@ -82,6 +82,10 @@ body.resizing .pdf-scroll, body.resizing .editor-scroll { pointer-events: none; 
 .pdf-toolbar { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; padding: 5px 10px;
                background: #2b2d31; border-bottom: 1px solid #17181a; color: #ccc; }
 .pdf-toolbar .pager, .pdf-toolbar .zoom { display: flex; align-items: center; gap: 4px; }
+.historical-pdf { display: flex; align-items: center; gap: 5px; min-width: 0; max-width: 45%;
+                  color: #ffcf6b; }
+.historical-pdf > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.historical-pdf button.ghost { flex: 0 0 auto; color: #ffdf9b; text-decoration: underline; }
 .pdf-toolbar .of { color: #999; }
 .page-input { width: 42px; text-align: center; background: #1e1f22; color: #ddd;
               border: 1px solid #45484e; border-radius: 4px; padding: 2px 4px; font: inherit; }
@@ -268,6 +272,52 @@ button.ghost.tiny { font-size: 11px; padding: 1px 6px; margin-left: auto; }
 .ck-restore:hover:not(:disabled) { background: #45484e; }
 .ck-s { color: #888; margin-top: 2px; }
 .ck-s .add { color: #56d364; } .ck-s .del { color: #f85149; }
+
+/* Semantic section projection of the checkpoint chain. */
+.history-mode { flex: 0 0 auto; margin: 7px 9px; align-self: flex-start; }
+.history-mode button, .scope-toggle button { font-size: 11px; padding: 3px 9px; }
+.section-tree { flex: 0 0 auto; max-height: 29%; overflow: auto; border-top: 1px solid #17181a;
+                border-bottom: 1px solid #17181a; }
+.section-row { width: 100%; display: flex; align-items: center; gap: 7px; padding-top: 5px;
+               padding-bottom: 5px; padding-right: 9px; border: 0; border-radius: 0;
+               background: transparent; color: #c9d1d9; text-align: left; }
+.section-row:hover { background: #2e3136; }
+.section-row.sel { background: #24344f; color: #fff; }
+.section-row.gone { opacity: .55; }
+.section-kind { width: 14px; flex: 0 0 auto; color: #8b949e; text-align: center; }
+.section-title { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.section-count { flex: 0 0 auto; min-width: 20px; padding: 0 5px; border-radius: 10px;
+                 background: #34373d; color: #9ba3ad; font-size: 10px; text-align: center; }
+.section-history-head { flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+                        padding: 7px 9px; border-bottom: 1px solid #17181a; }
+.section-heading { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis;
+                   white-space: nowrap; font-weight: 600; color: #e6edf3; }
+.scope-toggle { flex: 0 0 auto; }
+.section-versions { flex: 0 0 auto; max-height: 28%; overflow: auto; padding: 3px 0; border-bottom: 1px solid #17181a; }
+.section-version { position: relative; display: flex; align-items: center; gap: 7px; min-height: 43px;
+                   padding: 5px 8px 5px 28px; cursor: pointer; }
+.section-version::before { content: ''; position: absolute; left: 15px; top: 0; bottom: 0;
+                           width: 1px; background: #3b4048; }
+.section-version:first-child::before { top: 50%; }
+.section-version:last-child::before { bottom: 50%; }
+.section-version:hover { background: #2e3136; }
+.section-version.sel { background: #202f46; }
+.version-node { position: absolute; left: 11px; width: 9px; height: 9px; border-radius: 50%;
+                background: #6ea8ff; border: 2px solid #26282c; z-index: 1; }
+.section-version.sel .version-node { background: #fff; border-color: #2d6cdf; }
+.version-main { min-width: 0; flex: 1 1 auto; }
+.version-time { color: #d0d7de; white-space: nowrap; }
+.version-change { margin-top: 2px; color: #8b949e; font-size: 11px; overflow: hidden;
+                  text-overflow: ellipsis; white-space: nowrap; }
+.current-tag { margin-left: 6px; padding: 0 5px; border-radius: 8px; background: #174b2a;
+               color: #7ee787; font-size: 9px; text-transform: uppercase; }
+.pdf-badge { flex: 0 0 auto; padding: 1px 4px; border: 1px solid #366447; border-radius: 3px;
+             color: #7ee787; font-size: 9px; }
+.confidence-low { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+                  width: 17px; height: 17px; border-radius: 50%; background: #4a391c; color: #ffcf6b; }
+.section-actions { flex: 0 0 auto; display: flex; justify-content: flex-end; gap: 6px;
+                   padding: 6px 8px; border-bottom: 1px solid #17181a; }
+.section-actions button { font-size: 11px; padding: 3px 8px; }
 
 /* Our own diff renderer (DiffView): calm line-level coloring, dark palette,
    long lines WRAP so nothing overflows the panel and the gutter stays aligned. */
