@@ -69,18 +69,18 @@ a.linkbtn:hover { background: #18a862; }
 .left-view { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .left-view.view-hidden { display: none; }
 
-/* Focused source/history views: use the whole workspace instead of preserving
-   a blank PDF column. PDF focus does the inverse. The Comments drawer can still
-   be opened alongside any view. */
+/* Focused source views use the whole workspace. History deliberately keeps its
+   timeline beside the rendered PDF so walking versions never loses context.
+   PDF focus does the inverse. The Comments drawer can accompany any view. */
 .layout.workspace-code .left,
-.layout.workspace-visual .left,
-.layout.workspace-history .left { flex: 1 1 auto; min-width: 0; border-right: 0; }
+.layout.workspace-visual .left { flex: 1 1 auto; min-width: 0; border-right: 0; }
 .layout.workspace-code .center,
-.layout.workspace-visual .center,
-.layout.workspace-history .center { display: none; }
+.layout.workspace-visual .center { display: none; }
 .layout.workspace-code .left > .tabs,
 .layout.workspace-visual .left > .tabs,
 .layout.workspace-history .left > .tabs { display: none; }
+.layout.workspace-history .left { border-right: 1px solid #17181a; }
+.layout.workspace-history .center { display: flex; }
 .layout.workspace-pdf .left { display: none; }
 .layout.workspace-pdf .center { flex: 1 1 auto; }
 
@@ -443,9 +443,12 @@ button.ghost.tiny { font-size: 11px; padding: 1px 6px; margin-left: auto; }
              color: #7ee787; font-size: 9px; }
 .confidence-low { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
                   width: 17px; height: 17px; border-radius: 50%; background: #4a391c; color: #ffcf6b; }
-.section-actions { flex: 0 0 auto; display: flex; justify-content: flex-end; gap: 6px;
+.section-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
                    padding: 6px 8px; border-bottom: 1px solid #17181a; }
 .section-actions button { font-size: 11px; padding: 3px 8px; }
+.version-stepper { display: flex; align-items: center; gap: 5px; }
+.version-position { min-width: 38px; color: #9ba3ad; font-size: 11px; text-align: center;
+                    font-variant-numeric: tabular-nums; }
 
 /* Our own diff renderer (DiffView): calm line-level coloring, dark palette,
    long lines WRAP so nothing overflows the panel and the gutter stays aligned. */

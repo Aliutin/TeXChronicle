@@ -57,6 +57,20 @@ export function HistoryPanel({
     () => section?.versions.find((candidate) => candidate.sha === selectedVersion) ?? null,
     [section, selectedVersion],
   );
+  const versionIndex = useMemo(
+    () => section?.versions.findIndex((candidate) => candidate.sha === selectedVersion) ?? -1,
+    [section, selectedVersion],
+  );
+
+  const selectSectionVersion = (candidate: SectionVersion) => {
+    setSelectedVersion(candidate.sha);
+    if (candidate.hasPdf) onPreviewVersion?.(candidate.sha, candidate.title);
+  };
+
+  const selectVersionAt = (index: number) => {
+    const candidate = section?.versions[index];
+    if (candidate) selectSectionVersion(candidate);
+  };
 
   const restoreProject = async (sha: string) => {
     if (!confirm('Restore the project to this version? Your current text is snapshotted first, so you can undo this.')) return;
@@ -160,7 +174,11 @@ export function HistoryPanel({
                 key={candidate.id}
                 className={`section-row ${candidate.id === selectedSection ? 'sel' : ''} ${candidate.present ? '' : 'gone'}`}
                 style={{ paddingLeft: 10 + Math.max(0, candidate.level - baseLevel) * 15 }}
-                onClick={() => setSelectedSection(candidate.id)}
+                onClick={() => {
+                  setSelectedSection(candidate.id);
+                  const newest = candidate.versions[0];
+                  if (newest) selectSectionVersion(newest);
+                }}
                 title={`${candidate.path}${candidate.label ? ` · ${candidate.label}` : ''}`}
               >
                 <span className="section-kind">{candidate.appendix ? 'A' : candidate.command === 'section' ? '§' : '›'}</span>
@@ -185,9 +203,15 @@ export function HistoryPanel({
               <div
                 key={candidate.versionId}
                 className={`section-version ${candidate.sha === selectedVersion ? 'sel' : ''}`}
-                onClick={() => {
-                  setSelectedVersion(candidate.sha);
-                  if (candidate.hasPdf) onPreviewVersion?.(candidate.sha, candidate.title);
+                onClick={() => selectSectionVersion(candidate)}
+                role="button"
+                tabIndex={0}
+                aria-pressed={candidate.sha === selectedVersion}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    selectSectionVersion(candidate);
+                  }
                 }}
               >
                 <span className="version-node" aria-hidden="true" />
@@ -203,8 +227,28 @@ export function HistoryPanel({
 
           {version && (
             <div className="section-actions">
+              <div className="version-stepper" aria-label="Browse section versions in order">
+                <button
+                  disabled={versionIndex <= 0}
+                  onClick={() => selectVersionAt(versionIndex - 1)}
+                  title="Show the next newer version"
+                >
+                  ← newer
+                </button>
+                <span className="version-position" aria-live="polite">
+                  {versionIndex + 1} / {section?.versions.length ?? 0}
+                </span>
+                <button
+                  disabled={versionIndex < 0 || versionIndex >= (section?.versions.length ?? 0) - 1}
+                  onClick={() => selectVersionAt(versionIndex + 1)}
+                  title="Show the next older version"
+                >
+                  older →
+                </button>
+              </div>
+              <span className="spacer" />
               <button disabled={!version.hasPdf} onClick={() => onPreviewVersion?.(version.sha, version.title)} title={version.hasPdf ? 'Show the exact PDF produced for this version' : 'This checkpoint predates stored PDF artifacts'}>
-                View PDF
+                Show render
               </button>
               <button disabled={busy || Boolean(section?.present && version.versionId === section.versions[0]?.versionId)} onClick={() => void restoreSemantic()} title="Restore only this section and its subsections; current state is checkpointed first">
                 ↩ restore section

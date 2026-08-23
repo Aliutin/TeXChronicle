@@ -1,6 +1,6 @@
 // The workspace shell: toolbar on top; primary Code / Live / PDF / Split
-// workspaces; History and Comments remain one click away. Split keeps the old
-// resizable side-by-side layout, while focused views give the task the canvas.
+// workspaces; History and Comments remain one click away. Split and History
+// keep a resizable side-by-side layout; focused editing views own the canvas.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchComments, fetchGitStatus, historicalPdfUrl, useLive, type Comment, type HistoryMode, type SyncTeXSourceLocation } from './api';
 import { Toolbar } from './components/Toolbar';
@@ -20,7 +20,7 @@ const WORKSPACE_HELP: Record<WorkspaceView, string> = {
   visual: 'Source-preserving visual editor',
   pdf: 'Compiled document',
   split: 'Source and PDF together',
-  history: 'Section versions and diffs',
+  history: 'Section history and exact PDF side by side',
 };
 
 // Minimum widths are measured, not guessed. The left panel carries fixed-size
@@ -131,7 +131,10 @@ export default function App() {
   const onSyncToPdf = useCallback((text: string) => { setSyncToPdf({ text, nonce: Date.now() }); }, []);
   const onPreviewVersion = useCallback((sha: string, title: string) => {
     setHistoricalPdf({ sha, title });
-    setWorkspaceView('pdf');
+    // A history selection changes the PDF inside the current two-pane workspace.
+    // It must not navigate to the focused PDF view and hide the timeline.
+    setLeftTab('history');
+    setLeftOpen(true);
     // PdfView retries the text jump after its historical pages finish rendering.
     setSyncToPdf({ text: title, nonce: Date.now() });
   }, []);
@@ -142,6 +145,8 @@ export default function App() {
   const { status, errorLog, reloadTick, pdfName, compileSeq } = useLive((m) => {
     if (m.type === 'comments-changed') { refreshComments(); setRightOpen(true); }
   });
+
+  const historyOrSplit = workspaceView === 'history' || workspaceView === 'split';
 
   const jumpToComment = useCallback((c: Comment) => {
     setSelectedComment(c.id);
@@ -231,8 +236,8 @@ export default function App() {
       </nav>
       <div className={`layout workspace-${workspaceView}`}>
         <div
-          className={`left ${workspaceView === 'split' && !leftOpen ? 'closed' : ''}`}
-          style={workspaceView === 'split' && leftOpen ? { flexBasis: leftWidth } : undefined}
+          className={`left ${historyOrSplit && !leftOpen ? 'closed' : ''}`}
+          style={historyOrSplit && leftOpen ? { flexBasis: leftWidth } : undefined}
         >
           <div className="tabs">
             <button className={leftTab === 'source' ? 'on' : ''} onClick={() => setLeftTab('source')}>Source</button>
@@ -272,8 +277,8 @@ export default function App() {
             <ErrorBoundary name="History panel"><HistoryPanel reloadTick={reloadTick} onPreviewVersion={onPreviewVersion} /></ErrorBoundary>
           </div>
         </div>
-        {workspaceView === 'split' && leftOpen && <Splitter dir="left" width={leftWidth} setWidth={setLeftWidth} min={MIN_LEFT} />}
-        {workspaceView === 'split' && !leftOpen && <button className="edge-open left-edge" onClick={() => setLeftOpen(true)} title="Open panel">»</button>}
+        {historyOrSplit && leftOpen && <Splitter dir="left" width={leftWidth} setWidth={setLeftWidth} min={MIN_LEFT} />}
+        {historyOrSplit && !leftOpen && <button className="edge-open left-edge" onClick={() => setLeftOpen(true)} title="Open panel">»</button>}
 
         <div className="center">
           {errorLog && <pre className="compile-error">{errorLog}</pre>}
