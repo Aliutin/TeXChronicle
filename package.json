@@ -39,7 +39,8 @@
     "node": ">=20.19.0"
   },
   "bin": {
-    "magictex-mcp": "bin/cli.mjs"
+    "magictex-mcp": "bin/cli.mjs",
+    "magictex": "bin/cli.mjs"
   },
   "files": [
     "bin/",

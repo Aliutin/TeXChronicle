@@ -32,5 +32,25 @@ if (isBelowFloor(process.versions.node, range)) {
 } else {
   const { register } = await import('tsx/esm/api');
   register();
-  await import(new URL('../src/server.ts', import.meta.url).href);
+
+  const command = process.argv[2];
+  if (command === 'preview' || command === 'open') {
+    await import(new URL('../src/standalone.ts', import.meta.url).href);
+  } else if (command === '--help' || command === '-h') {
+    console.log(`MagicTeX — local LaTeX workspace and MCP server
+
+Usage:
+  magictex preview [main.tex] [options]   Open the standalone editor
+  magictex open [main.tex] [options]      Alias for preview
+  magictex-mcp                            Start the MCP server on stdio
+
+Run "magictex preview --help" for standalone options.`);
+  } else if (command) {
+    console.error(`Unknown command: ${command}\nRun "magictex --help" for usage.`);
+    process.exitCode = 2;
+  } else {
+    // No arguments remains the MCP transport entry point, preserving every
+    // existing Claude/Codex configuration.
+    await import(new URL('../src/server.ts', import.meta.url).href);
+  }
 }

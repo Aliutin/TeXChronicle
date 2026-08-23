@@ -97,7 +97,32 @@ anchored annotations):
 - **Actionable errors.** Failed compiles return parsed `{file, line, message}`
   errors so Claude can self-correct, and show in the workspace.
 
-## Setup
+## Run the editor without an LLM
+
+From a source checkout, install and link MagicTeX once:
+
+```bash
+npm install
+npm link
+```
+
+Then run it from any LaTeX project directory:
+
+```bash
+cd /path/to/paper
+magictex preview main.tex
+```
+
+The browser workspace opens and stays live while that terminal is running.
+Use **⚡ Live** for recompile-as-you-type, or **Ctrl+S** to save and compile.
+Every clean render is recorded in History. Press **Ctrl+C** to stop. For a
+project elsewhere, use `magictex preview --project /path/to/paper main.tex`.
+
+Claude Code, Codex, and other MCP clients are optional: they can edit the same
+files while this standalone workspace is running, but they are not needed to
+open or use it.
+
+## Setup with an LLM/MCP client
 
 MagicTeX is on npm as [`magictex-mcp`](https://www.npmjs.com/package/magictex-mcp) and
 listed in the [official MCP registry](https://registry.modelcontextprotocol.io) as
