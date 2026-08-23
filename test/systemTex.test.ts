@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, chmodSync, copyFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { probeSystemTex, forgetSystemTex, isStaleLatexmkFailure, systemTexUnavailableMessage, systemTexAdvice } from '../src/engine/systemTex.js';
+import { probeSystemTex, forgetSystemTex, isStaleLatexmkFailure, systemLatexmkArgs, systemTexUnavailableMessage, systemTexAdvice } from '../src/engine/systemTex.js';
 
 // "No local TeX" and "a local TeX that cannot run" are different problems with
 // opposite answers, and they used to produce the same sentence. A user installed
@@ -120,6 +120,11 @@ test('only latexmk stale-error output triggers a forced rebuild', () => {
   ].join('\n')), true);
   assert.equal(isStaleLatexmkFailure("Latexmk: Nothing to do for 'paper.tex'. All targets are up-to-date."), false);
   assert.equal(isStaleLatexmkFailure('! LaTeX Error: Undefined control sequence.'), false);
+});
+
+test('latexmk continues through recoverable MiKTeX first-pass failures', () => {
+  const args = systemLatexmkArgs('build', 'paper.tex', 'pdflatex');
+  assert.ok(args.includes('-f'), 'latexmk would stop before bibliography and reference reruns');
 });
 
 // ── the staleness fix ───────────────────────────────────────────────────────

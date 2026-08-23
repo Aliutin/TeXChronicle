@@ -88,6 +88,28 @@ First result.
   assert.equal(graph.sections.find((s) => s.title === 'Results')?.versions.length, 2);
 });
 
+test('tracks the abstract as a first-class semantic part', () => {
+  const first = String.raw`\begin{document}
+\begin{abstract}
+Initial summary.
+\end{abstract}
+\section{Introduction}
+Stable introduction.
+\end{document}`;
+  const second = first.replace('Initial summary.', 'Revised summary.');
+  const graph = buildSectionGraph([
+    { sha: '3'.repeat(40), time: '2026-08-23T10:00:00Z', files: [{ path: 'main.tex', source: first }] },
+    { sha: '4'.repeat(40), time: '2026-08-23T10:05:00Z', files: [{ path: 'main.tex', source: second }] },
+  ]);
+
+  const abstract = graph.sections.find((section) => section.title === 'Abstract');
+  assert.ok(abstract);
+  assert.equal(abstract.command, 'abstract');
+  assert.equal(abstract.versions.length, 2);
+  assert.ok(abstract.versions[1].changes.includes('edited'));
+  assert.equal(graph.sections.find((section) => section.title === 'Introduction')?.versions.length, 1);
+});
+
 test('finds real input files without following commented or literal examples', () => {
   const source = String.raw`% \input{ignored}
 \input{sections/intro}

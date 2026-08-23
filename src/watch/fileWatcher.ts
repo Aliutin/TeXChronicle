@@ -39,6 +39,13 @@ export function startWatching(projectRoot: string): void {
       return false; // files are filtered by extension in the event handler
     },
     ignoreInitial: true, // the tool's own first compile covers the initial state
+    // libuv's recursive Windows watcher is unreliable on cloud-synced trees:
+    // Dropbox can suppress ordinary change events, and short 8.3 aliases can
+    // even trip a native fs-event assertion. Polling avoids both failure modes
+    // and is limited to Windows, where these paths are common.
+    usePolling: process.platform === 'win32',
+    interval: 500,
+    binaryInterval: 1000,
     awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 },
   });
   const onChange = (path: string) => {

@@ -368,6 +368,12 @@ export function systemLatexmkArgs(
 ): string[] {
   return [
     ENGINE_FLAG[engine] ?? '-pdf', '-synctex=1', '-interaction=nonstopmode', '-file-line-error',
+    // Some MiKTeX installations return 1 for a recoverable first pass (for
+    // example its "updates not checked" major warning). Without -f latexmk
+    // stops before the bibliography/reference reruns and leaves a smaller,
+    // unresolved PDF. We still classify the complete log and never publish a
+    // genuinely erroneous render over the last clean one.
+    '-f',
     ...(force ? ['-g'] : []),
     ...(shellEscape ? ['-shell-escape'] : []),
     `-outdir=${outdir}`, mainRelPath,

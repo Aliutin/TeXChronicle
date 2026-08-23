@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export const SECTION_COMMANDS = [
+  'abstract',
   'part',
   'chapter',
   'section',
@@ -13,6 +14,7 @@ export const SECTION_COMMANDS = [
 export type SectionCommand = typeof SECTION_COMMANDS[number];
 
 const LEVEL: Record<SectionCommand, number> = {
+  abstract: 2,
   part: 0,
   chapter: 1,
   section: 2,
@@ -251,6 +253,28 @@ export function parseLatexSections(source: string, path = 'main.tex'): ParsedSec
   commandRe.lastIndex = scanStart;
 
   const found: Array<Omit<ParsedSection, 'end' | 'endLine' | 'parentIndex' | 'siblingOrder' | 'source' | 'ownSource' | 'matchText' | 'contentHash'>> = [];
+  // Abstracts are semantic document parts even though LaTeX spells them as an
+  // environment rather than a sectioning command. Without this, a very common
+  // LLM edit appeared only in whole-document checkpoints and was invisible in
+  // the part-by-part history the workspace promises.
+  const abstract = /\\begin\s*\{abstract\}/g.exec(masked.slice(scanStart, scanEnd));
+  if (abstract) {
+    const start = scanStart + abstract.index;
+    found.push({
+      path,
+      command: 'abstract',
+      level: LEVEL.abstract,
+      starred: false,
+      title: 'Abstract',
+      normalizedTitle: 'abstract',
+      appendix: false,
+      start,
+      headingEnd: start + abstract[0].length,
+      startLine: lineAt(starts, start),
+      order: 0,
+      label: undefined,
+    });
+  }
   for (;;) {
     const match = commandRe.exec(masked);
     if (!match || match.index >= scanEnd) break;
@@ -283,6 +307,8 @@ export function parseLatexSections(source: string, path = 'main.tex'): ParsedSec
     });
     commandRe.lastIndex = close + 1;
   }
+  found.sort((a, b) => a.start - b.start);
+  found.forEach((section, index) => { section.order = index; });
 
   const sections: ParsedSection[] = [];
   const stack: number[] = [];
