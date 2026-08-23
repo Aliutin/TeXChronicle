@@ -5,23 +5,22 @@
 // When a reload event arrives and the editor has no unsaved changes, the open
 // file is re-fetched so external edits (Claude's) don't get clobbered by a
 // later save from a stale buffer.
-// Text-match sync: a click in the PDF sends prose here (find the file+line,
-// open it, scroll the editor there); a click in the editor sends the line's
-// prose to the PDF.
+// PDF clicks normally arrive with a genuine SyncTeX file+line. Visible prose
+// refines macro-expanded blocks and remains the fallback for the WASM backend.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { EditorView, keymap } from '@codemirror/view';
 import { EditorSelection, Prec } from '@codemirror/state';
 import { undo, redo } from '@codemirror/commands';
 import { latex } from 'codemirror-lang-latex';
-import { normalize, phrase, stripLatex } from '../sync';
+import { findSourceLine, phrase, stripLatex } from '../sync';
 import { visualMode } from '../visual';
 import { FileTree } from './FileTree';
 import { saveFile, type Status } from '../api';
 
 const LIVE_DEBOUNCE_MS = 1200; // Live mode: recompile this long after you stop typing
 const AUTOSAVE_MS = 30000;      // safety net: persist edits (no recompile) every 30s
-interface SyncTarget { text: string; nonce: number }
+interface SyncTarget { text: string; nonce: number; file?: string; line?: number; column?: number }
 
 export function SourcePanel({
   reloadTick, syncTarget, onSyncToPdf, dead = false, liveStatus, compileSeq = 0,
@@ -74,7 +73,11 @@ export function SourcePanel({
   // wrong file, or declared saved when it was not.
   const parked = useRef<Map<string, string>>(new Map());
   const [dirtyPaths, setDirtyPaths] = useState<Set<string>>(new Set());
-  const pendingJumpLine = useRef<number | null>(null);
+  const pendingJump = useRef<{ path: string; line: number } | null>(null);
+  // File reads can finish out of order (especially when a PDF click changes the
+  // target twice quickly). Only the newest navigation is allowed to replace the
+  // editor buffer.
+  const openRequest = useRef(0);
   // Parked files plus the one on screen, so the marker is right for the file the
   // user is actually looking at as well as the ones they left.
   const allDirty = useMemo(() => {
@@ -85,6 +88,7 @@ export function SourcePanel({
   }, [dirtyPaths, dirty, active]);
 
   const openFile = useCallback(async (path: string) => {
+    const request = ++openRequest.current;
     // Park the outgoing file's unsaved text before anything overwrites the
     // buffer. Without this, switching files silently threw the edits away: the
     // cache only ever held the last text FETCHED or SAVED, never the dirty
@@ -111,8 +115,13 @@ export function SourcePanel({
 
     try {
       const r = await fetch(`/api/file?path=${encodeURIComponent(path)}`);
-      if (!r.ok) { setLoadError(`Couldn't load ${path}: ${await r.text()}`); return; }
+      if (!r.ok) {
+        const detail = await r.text();
+        if (request === openRequest.current) setLoadError(`Couldn't load ${path}: ${detail}`);
+        return;
+      }
       const text = await r.text();
+      if (request !== openRequest.current) return;
       cache.current.set(path, text);
       setActive(path);
       setContent(text);
@@ -120,7 +129,7 @@ export function SourcePanel({
       setSaveState('idle');
       setLoadError(null);
     } catch (e) {
-      setLoadError(`Couldn't load ${path}: ${String(e)}`);
+      if (request === openRequest.current) setLoadError(`Couldn't load ${path}: ${String(e)}`);
     }
   }, []);
 
@@ -284,37 +293,63 @@ export function SourcePanel({
 
   // After openFile swaps content in, run any pending jump for that file.
   useEffect(() => {
-    if (pendingJumpLine.current === null) return;
-    const line = pendingJumpLine.current;
-    pendingJumpLine.current = null;
-    requestAnimationFrame(() => jumpToLine(line));
-  }, [content, jumpToLine]);
+    const pending = pendingJump.current;
+    if (!pending || active !== pending.path) return;
+    pendingJump.current = null;
+    requestAnimationFrame(() => {
+      if (activeRef.current === pending.path) jumpToLine(pending.line);
+    });
+  }, [active, content, jumpToLine]);
 
-  // PDF → source: find the file+line whose prose matches, open it, jump there.
+  // PDF → source: prefer the genuine SyncTeX file+line. Visible prose refines
+  // nearby macro-expanded material (all of \maketitle may map to one invocation)
+  // and is still the full fallback for the bundled WASM engine.
   useEffect(() => {
     if (!syncTarget) return;
-    const target = phrase(syncTarget.text, 6);
-    if (!target) return;
-    (async () => {
-      for (const f of files) {
+    let cancelled = false;
+    // Cancel any older file navigation even when this target is already open
+    // and therefore will not call openFile itself.
+    openRequest.current++;
+    pendingJump.current = null;
+    void (async () => {
+      const load = async (f: string): Promise<string | null> => {
+        const held = parked.current.get(f);
+        if (held !== undefined) return held;
+        if (f === activeRef.current) return contentRef.current;
         if (!cache.current.has(f)) {
           try {
             const r = await fetch(`/api/file?path=${encodeURIComponent(f)}`);
             if (r.ok) cache.current.set(f, await r.text());
           } catch { /* ignore */ }
         }
-        const lines = (cache.current.get(f) ?? '').split('\n');
-        for (let i = 0; i < lines.length; i++) {
-          const src = normalize(stripLatex(lines[i]));
-          if (src.length < 4) continue;
-          if (src.includes(target) || (target.includes(src) && src.length > 10)) {
-            if (f === activeRef.current) jumpToLine(i);
-            else { pendingJumpLine.current = i; void openFile(f); }
-            return;
-          }
-        }
+        return cache.current.get(f) ?? null;
+      };
+      const jump = (f: string, line0: number) => {
+        if (cancelled) return;
+        if (f === activeRef.current) jumpToLine(line0);
+        else { pendingJump.current = { path: f, line: line0 }; void openFile(f); }
+      };
+
+      if (syncTarget.file && syncTarget.line && syncTarget.line > 0) {
+        const source = await load(syncTarget.file);
+        if (cancelled) return;
+        const refined = source && syncTarget.text
+          ? findSourceLine(source, syncTarget.text, syncTarget.line)
+          : null;
+        jump(syncTarget.file, refined ?? syncTarget.line - 1);
+        return;
+      }
+
+      if (!phrase(syncTarget.text, 3)) return;
+      for (const f of files) {
+        const source = await load(f);
+        if (cancelled) return;
+        if (source === null) continue;
+        const line = findSourceLine(source, syncTarget.text);
+        if (line !== null) { jump(f, line); return; }
       }
     })();
+    return () => { cancelled = true; };
   }, [syncTarget, files, openFile, jumpToLine]);
 
   // ── Formatting toolbar: wrap the selection (or insert a snippet) ────────

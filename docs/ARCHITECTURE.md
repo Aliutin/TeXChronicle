@@ -40,7 +40,8 @@ open is the React workspace with a lightweight `pdf.js` viewer — no WASM in it
   page + WASM assets to the hidden browser; the workspace (`/app`, from `ui/dist`)
   or the legacy inline viewer (`src/preview/viewerPage.ts`, only if `ui/dist` is
   missing); `/api/*` (files, comments, upload); `/git/*` (checkpoints, diff,
-  status, semantic sections, section diffs/restores, historical PDFs); `/export.zip` +
+  status, semantic sections, section diffs/restores, historical PDFs); inverse
+  SyncTeX queries for the current system-TeX render; `/export.zip` +
   `/overleaf/link`. All responses carry COOP/COEP headers
   (the engine's Worker/SharedArrayBuffer require cross-origin isolation).
 - `src/preview/filesApi.ts` — the file tree + read/write/rename/delete/upload
@@ -117,14 +118,16 @@ falls back to the legacy inline `/viewer` when `ui/dist` is missing (fresh clone
 - `ui/src/components/Toolbar.tsx` — brand mark + doc title, Recompile, comments toggle,
   Export .zip / Download PDF.
 - `ui/src/components/PdfView.tsx` — pdf.js canvas + **text layer** (selectable) + highlight
-  layer; text selection opens the comment composer. Highlights are **re-anchored to the live
+  layer; a PDF point is converted to 72-dpi page coordinates for inverse SyncTeX, while text
+  selection opens the comment composer. Highlights are **re-anchored to the live
   text on every render** (matching a comment's quote by head/tail phrase, progressively
   shortened) rather than pinned to frozen coordinates, so they track reflow after an edit;
   shaped like a text selection (first/last line partial, middle lines flush full-width) so a
   multi-line highlight doesn't fragment on font-metric quirks (italics, inline math).
 - `ui/src/components/SourcePanel.tsx` — CodeMirror 6 LaTeX editor (Code/Visual modes, line
   wrap toggle) over `/api/files` + `/api/file` (GET/PUT, path-guarded); autosaves every 30s
-  without recompiling, Ctrl+S / Save / Recompile rebuild on demand.
+  without recompiling, Ctrl+S / Save / Recompile rebuild on demand; opens the exact SyncTeX
+  file/line and uses nearby rendered prose to refine macro-expanded blocks.
 - `ui/src/components/FileTree.tsx` — nested Overleaf-style file tree: new/rename/delete,
   figure upload, resizable height.
 - `ui/src/components/HistoryPanel.tsx` + `DiffView.tsx` — semantic section tree and version graph

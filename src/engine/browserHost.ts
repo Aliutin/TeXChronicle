@@ -16,6 +16,9 @@ export interface CompileOutput {
   success: boolean;
   exitCode?: number;
   pdf?: Uint8Array;
+  /** Compiler-generated source map for the PDF. Only the system backend can
+   *  provide this; the bundled WASM engine has no SyncTeX output. */
+  syncTex?: Uint8Array;
   pdfLen: number;
   log: string;
   ms: number;

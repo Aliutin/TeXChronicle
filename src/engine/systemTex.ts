@@ -4,7 +4,7 @@
 // out and keeps the zero-install path.
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFile, mkdir } from 'node:fs/promises';
+import { access, readFile, mkdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type { CompileOutput } from './browserHost.js';
 import type { Engine } from '../project/compileProject.js';
@@ -248,6 +248,23 @@ const ENGINE_FLAG: Record<Engine, string> = {
   xelatex: '-xelatex', lualatex: '-lualatex', pdflatex: '-pdf',
 };
 
+/** Public for a small contract test: dropping -synctex=1 silently degrades the
+ * viewer back to phrase matching while every ordinary compile still passes. */
+export function systemLatexmkArgs(
+  outdir: string,
+  mainRelPath: string,
+  engine: Engine,
+  shellEscape = false,
+  force = false,
+): string[] {
+  return [
+    ENGINE_FLAG[engine] ?? '-pdf', '-synctex=1', '-interaction=nonstopmode', '-file-line-error',
+    ...(force ? ['-g'] : []),
+    ...(shellEscape ? ['-shell-escape'] : []),
+    `-outdir=${outdir}`, mainRelPath,
+  ];
+}
+
 /**
  * Stop waiting when latexmk has gone quiet, not when the clock says so.
  *
@@ -292,15 +309,21 @@ export async function compileWithSystemTex(root: string, mainRelPath: string, en
   const started = Date.now();
   const outdir = join(root, '.latex-preview', 'build');
   await mkdir(outdir, { recursive: true });
+  const stem = basename(mainRelPath).replace(/\.tex$/i, '');
+  const pdfPath = join(outdir, stem + '.pdf');
+  const syncPath = join(outdir, stem + '.synctex.gz');
+  // Adding -synctex=1 to an existing latexmk build does not itself invalidate
+  // the target: latexmk says "Nothing to do" and leaves no map. Force exactly
+  // that one upgrade build; subsequent compiles remain incremental.
+  const [hadPdf, hadSync] = await Promise.all([
+    access(pdfPath).then(() => true, () => false),
+    access(syncPath).then(() => true, () => false),
+  ]);
   // -shell-escape lets the document execute arbitrary shell commands, so it is
   // opt-in per call rather than a default. Packages like svg and minted cannot
   // work without it, and the user is the only one who can say whether this
   // particular source is trusted.
-  const args = [
-    ENGINE_FLAG[engine] ?? '-pdf', '-interaction=nonstopmode', '-file-line-error',
-    ...(shellEscape ? ['-shell-escape'] : []),
-    `-outdir=${outdir}`, mainRelPath,
-  ];
+  const args = systemLatexmkArgs(outdir, mainRelPath, engine, shellEscape, hadPdf && !hadSync);
 
   const { code, out, stopped } = await runLatexmk(root, args);
 
@@ -320,9 +343,11 @@ export async function compileWithSystemTex(root: string, mainRelPath: string, en
 
   if (code === 0) {
     try {
-      const pdfPath = join(outdir, basename(mainRelPath).replace(/\.tex$/i, '') + '.pdf');
       const pdf = new Uint8Array(await readFile(pdfPath));
-      return { success: true, exitCode: 0, pdf, pdfLen: pdf.length, log: out, ms: Date.now() - started };
+      // A PDF remains useful even if an unusual TeX installation did not emit
+      // SyncTeX. The viewer will transparently retain its text-match fallback.
+      const syncTex = await readFile(syncPath).then((b) => new Uint8Array(b), () => undefined);
+      return { success: true, exitCode: 0, pdf, syncTex, pdfLen: pdf.length, log: out, ms: Date.now() - started };
     } catch {
       return { success: false, exitCode: 0, pdf: undefined, pdfLen: 0, log: out, ms: Date.now() - started, error: 'latexmk reported success but wrote no PDF' };
     }

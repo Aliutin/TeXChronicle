@@ -154,6 +154,30 @@ export async function fetchDiff(sha: string): Promise<string> {
   return r.ok ? r.text() : '';
 }
 
+export interface SyncTeXSourceLocation {
+  file: string;
+  line: number;
+  column?: number;
+}
+
+/** Resolve a PDF point to project source. Null means no genuine map is
+ * available (WASM/historical render) or SyncTeX found no nearby source node. */
+export async function inverseSyncTeX(page: number, x: number, y: number): Promise<SyncTeXSourceLocation | null> {
+  try {
+    const query = new URLSearchParams({
+      page: String(page), x: x.toFixed(3), y: y.toFixed(3),
+    });
+    const r = await fetch(`/api/synctex/inverse?${query}`);
+    if (!r.ok) return null;
+    const result = await r.json() as { available?: boolean } & Partial<SyncTeXSourceLocation>;
+    return result.available && typeof result.file === 'string' && Number.isInteger(result.line)
+      ? { file: result.file, line: result.line!, ...(result.column === undefined ? {} : { column: result.column }) }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchSectionHistory(): Promise<SectionHistoryPayload> {
   const r = await fetch('/git/sections');
   if (!r.ok) throw new Error((await r.text()) || 'section history failed');

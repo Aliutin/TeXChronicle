@@ -6,8 +6,8 @@
 // COOP/COEP headers are set on everything — the engine's Worker/SharedArrayBuffer
 // need cross-origin isolation (spike finding).
 import { createServer, type Server, type ServerResponse } from 'node:http';
-import { readFile, stat } from 'node:fs/promises';
-import { dirname, extname, join, normalize, resolve, sep } from 'node:path';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, extname, join, normalize, resolve, sep } from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -26,6 +26,7 @@ import { buildOverleafZip } from '../export/overleafZip.js';
 import { resolveMainFile } from '../project/resolveMainFile.js';
 import { getProjectRoot } from '../session.js';
 import { busytexDir } from '../engine/assetsDir.js';
+import { inverseSyncTeX } from './synctex.js';
 
 const PKG_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 
@@ -119,7 +120,7 @@ export interface PreviewServerHandle {
   viewerUrl: string;
   /** Replace the current PDF and notify viewers to re-render. `name` is the
    *  source main-file (e.g. "main.tex") used for the download filename. */
-  setLatestPdf: (pdf: Uint8Array, name?: string) => void;
+  setLatestPdf: (pdf: Uint8Array, name?: string, syncTex?: Uint8Array) => Promise<void>;
   /** Tell viewers a compile is running / failed, or that comments changed. */
   broadcast: (msg: { type: 'compiling' } | { type: 'compile-error'; log: string } | { type: 'comments-changed' }) => void;
   /** Say goodbye to open tabs, drop every socket, and stop listening. */
@@ -129,6 +130,11 @@ export interface PreviewServerHandle {
 export function startPreviewServer(): Promise<PreviewServerHandle> {
   let latestPdf: Buffer | null = null;
   let latestName: string | undefined;
+  // The published PDF and map are kept as a matched pair. Two alternating slots
+  // let the next compile finish writing off to the side before queries switch to
+  // it, so a click can never observe half of one render and half of another.
+  let latestSyncPdf: string | null = null;
+  let syncSlot = 0;
   const clients = new Set<WebSocket>();
 
   const send = (msg: unknown) => {
@@ -300,6 +306,23 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
       catch (e) { res.writeHead(500, ISOLATION_HEADERS).end(String((e as Error).message)); return; }
     }
 
+    // PDF -> source using the genuine map produced by the system TeX backend.
+    // The browser supplies 72-dpi page coordinates with a top-left origin, the
+    // native convention of `synctex edit`. WASM and historical PDFs have no map;
+    // the UI retains its text-based fallback for those cases.
+    if (pathname === '/api/synctex/inverse') {
+      const page = Number(reqUrl.searchParams.get('page'));
+      const x = Number(reqUrl.searchParams.get('x'));
+      const y = Number(reqUrl.searchParams.get('y'));
+      if (!Number.isInteger(page) || page < 1 || !Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) {
+        res.writeHead(400, ISOLATION_HEADERS).end('invalid SyncTeX point'); return;
+      }
+      const pdf = latestSyncPdf;
+      if (!pdf) return json(res, { available: false });
+      const location = await inverseSyncTeX(getProjectRoot(), pdf, page, x, y);
+      return json(res, location ? { available: true, ...location } : { available: false });
+    }
+
     // File tree (folders + editable files) for the Overleaf-style panel.
     if (pathname === '/api/tree') {
       try { return json(res, await listTree(getProjectRoot())); }
@@ -456,7 +479,31 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
       const url = `http://127.0.0.1:${port}`;
       resolve({
         server, port, url, viewerUrl: `${url}/viewer`,
-        setLatestPdf: (pdf, name) => { latestPdf = Buffer.from(pdf); latestName = name; send({ type: 'reload', name }); },
+        setLatestPdf: async (pdf, name, syncTex) => {
+          latestPdf = Buffer.from(pdf);
+          latestName = name;
+          latestSyncPdf = null;
+          if (name && syncTex?.length) {
+            try {
+              const nextSlot = syncSlot === 1 ? 2 : 1;
+              const dir = join(getProjectRoot(), '.latex-preview', 'synctex', String(nextSlot));
+              await mkdir(dir, { recursive: true });
+              const stem = basename(name).replace(/\.tex$/i, '') || 'preview';
+              const pdfPath = join(dir, stem + '.pdf');
+              // Write the inactive slot completely, then switch the pointer.
+              await Promise.all([
+                writeFile(pdfPath, latestPdf),
+                writeFile(join(dir, stem + '.synctex.gz'), syncTex),
+              ]);
+              syncSlot = nextSlot;
+              latestSyncPdf = pdfPath;
+            } catch (error) {
+              // Mapping is an enhancement, never a reason to hide a good PDF.
+              console.warn('[MagicTeX] could not publish SyncTeX data; using text matching', error);
+            }
+          }
+          send({ type: 'reload', name });
+        },
         broadcast: (msg) => send(msg),
         close: () => new Promise<void>((done) => {
           // Measured, on the version this replaces: with one WebSocket peer that

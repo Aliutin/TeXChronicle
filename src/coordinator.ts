@@ -78,7 +78,7 @@ async function doCompile(): Promise<CompileProjectResult> {
           }).catch(() => {}); // history/artifact failure never turns a good compile into a bad one
         }
       }
-      preview.setLatestPdf(result.pdf, result.mainFile);
+      await preview.setLatestPdf(result.pdf, result.mainFile, result.syncTex);
       lastPublishWasClean = clean;
     }
     if (!clean) {

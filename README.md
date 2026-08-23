@@ -59,6 +59,10 @@ anchored annotations):
 - **Editable source panel.** A CodeMirror LaTeX editor with the project's files —
   save (Ctrl+S) recompiles and refreshes the PDF, Typst-style. Or keep using your
   own editor: any save triggers the same live loop.
+- **PDF → exact source.** Click a point in a PDF produced by the local TeX backend
+  to open the corresponding source file and line via SyncTeX. Visible-text
+  refinement handles macro-expanded title/author blocks, and remains a best-effort
+  fallback when the bundled WASM backend has no SyncTeX map.
 - **Live reload.** A file watcher recompiles on every save — Claude's edits, the
   built-in editor's, or your external editor's.
 - **Section-aware change history.** Each successful compile is auto-snapshotted

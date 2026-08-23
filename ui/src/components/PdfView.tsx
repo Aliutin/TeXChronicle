@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import '../mathSumPrecise'; // must precede pdfjs — see the file for why
 import * as pdfjs from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { createComment, type Comment } from '../api';
+import { createComment, inverseSyncTeX, type Comment, type SyncTeXSourceLocation } from '../api';
 import { normalize, phrase } from '../sync';
 import { groupLines, columnsFromTextItems } from '../lines';
 
@@ -64,7 +64,7 @@ export function PdfView({
   comments: Comment[];
   onPages?: (n: number) => void;
   onSelectComment?: (id: string) => void;
-  onSyncToSource?: (text: string) => void;
+  onSyncToSource?: (target: { text: string } & Partial<SyncTeXSourceLocation>) => void;
   syncTarget?: SyncTarget | null;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -82,6 +82,7 @@ export function PdfView({
   const baseWidth = useRef(0); // page-1 width at scale 1, for fit-to-width
   const scaleRef = useRef(scale);
   scaleRef.current = scale;
+  const reverseSyncSeq = useRef(0);
 
   // ── Render PDF pages (canvas + text layer) ──────────────────────────────
   useEffect(() => {
@@ -234,19 +235,48 @@ export function PdfView({
     pagesRef.current?.querySelector(`.page[data-page="${p}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
-  // ── Click a word (no selection) → jump to that text in the source ───────
-  const onClick = (e: React.MouseEvent) => {
+  // ── Click PDF → genuine inverse SyncTeX, with visible-text fallback ─────
+  const onClick = async (e: React.MouseEvent) => {
     const sel = window.getSelection();
     if (sel && !sel.isCollapsed) return; // a drag-select is a comment, not a sync
-    const span = (e.target as HTMLElement).closest('.textLayer span') as HTMLElement | null;
-    if (!span || !onSyncToSource) return;
-    let text = span.textContent ?? '';
-    let n = span.nextElementSibling;
+    if (!onSyncToSource) return;
+    const pageEl = (e.target as HTMLElement).closest('.page') as HTMLElement | null;
+    if (!pageEl) return;
+
+    // The text layer can contain transformed spans whose boxes overlap. Prefer
+    // the actual event target; if the click landed in a gap, retain a nearby span
+    // only for the fallback. SyncTeX itself does not need text at all.
+    let span = (e.target as HTMLElement).closest('.textLayer span') as HTMLElement | null;
+    if (!span) {
+      let best = Number.POSITIVE_INFINITY;
+      for (const candidate of pageEl.querySelectorAll('.textLayer span')) {
+        const r = candidate.getBoundingClientRect();
+        const dx = e.clientX < r.left ? r.left - e.clientX : e.clientX > r.right ? e.clientX - r.right : 0;
+        const dy = e.clientY < r.top ? r.top - e.clientY : e.clientY > r.bottom ? e.clientY - r.bottom : 0;
+        const distance = Math.hypot(dx, dy);
+        if (distance < best) { best = distance; span = candidate as HTMLElement; }
+      }
+      if (best > 24) span = null;
+    }
+    let text = span?.textContent ?? '';
+    let n = span?.nextElementSibling ?? null;
     while (n && normalize(text).split(' ').filter(Boolean).length < 6) {
       text += ' ' + (n.textContent ?? '');
       n = n.nextElementSibling;
     }
-    if (normalize(text)) onSyncToSource(text);
+
+    const page = Number(pageEl.dataset.page);
+    const pageBox = pageEl.getBoundingClientRect();
+    const renderedScale = parseFloat(getComputedStyle(pageEl).getPropertyValue('--scale-factor')) || scaleRef.current;
+    // SyncTeX's CLI uses big points (72 dpi) from the top-left. pdf.js viewport
+    // pixels at scale 1 use that same unit, so divide only by the render scale.
+    const x = (e.clientX - pageBox.left) / renderedScale;
+    const y = (e.clientY - pageBox.top) / renderedScale;
+    const seq = ++reverseSyncSeq.current;
+    const location = await inverseSyncTeX(page, x, y);
+    if (seq !== reverseSyncSeq.current) return; // a newer click already won
+    if (location) onSyncToSource({ text, ...location });
+    else if (normalize(text)) onSyncToSource({ text });
   };
 
   // ── Source → PDF: scroll the matching page/word into view and flash it ──

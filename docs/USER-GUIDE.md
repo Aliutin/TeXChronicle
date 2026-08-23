@@ -14,6 +14,9 @@
 3. From then on the PDF stays live. Your own editor's saves and Claude's edits auto-recompile;
    in the built-in editor you press **Ctrl+S** / **Recompile** to rebuild (it auto-saves your
    work every 30s without recompiling).
+4. **Click a point in the live PDF** to open its source file and line. A local TeX build uses
+   its real SyncTeX map; bundled-WASM and older historical PDFs fall back to visible-text
+   matching. Drag-selecting text still opens the comment composer instead of navigating.
 
 ## Slash commands (plugin)
 

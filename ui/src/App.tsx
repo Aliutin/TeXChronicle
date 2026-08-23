@@ -2,7 +2,7 @@
 // PDF center with anchored comments; Comments workspace on the right. Both side
 // panels resize with Overleaf-style drag splitters (widths persisted).
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { fetchComments, fetchGitStatus, historicalPdfUrl, useLive, type Comment, type HistoryMode } from './api';
+import { fetchComments, fetchGitStatus, historicalPdfUrl, useLive, type Comment, type HistoryMode, type SyncTeXSourceLocation } from './api';
 import { Toolbar } from './components/Toolbar';
 import { PdfView } from './components/PdfView';
 import { HistoryPanel } from './components/HistoryPanel';
@@ -71,9 +71,9 @@ export default function App() {
   const [pages, setPages] = useState(0);
   const [leftWidth, setLeftWidth] = usePanelWidth('ws-left-width', 420, MIN_LEFT);
   const [rightWidth, setRightWidth] = usePanelWidth('ws-right-width', 320, MIN_RIGHT);
-  // Text-match sync between the PDF and the source editor (nonce forces re-fire
-  // even when the same text is clicked twice).
-  const [syncToSource, setSyncToSource] = useState<{ text: string; nonce: number } | null>(null);
+  // Genuine SyncTeX location when available, visible-text fallback otherwise.
+  // The nonce forces re-fire even when the same point is clicked twice.
+  const [syncToSource, setSyncToSource] = useState<({ text: string; nonce: number } & Partial<SyncTeXSourceLocation>) | null>(null);
   // Read once at mount: whether git exists doesn't change under a running server.
   const [historyMode, setHistoryMode] = useState<HistoryMode | null>(null);
   const [historyDetail, setHistoryDetail] = useState<string | undefined>();
@@ -83,10 +83,10 @@ export default function App() {
   useEffect(() => { fetchGitStatus().then((s) => { setHistoryMode(s.mode); setHistoryDetail(s.detail); }); }, []);
   const [syncToPdf, setSyncToPdf] = useState<{ text: string; nonce: number } | null>(null);
   const [historicalPdf, setHistoricalPdf] = useState<{ sha: string; title: string } | null>(null);
-  const onSyncToSource = useCallback((text: string) => {
+  const onSyncToSource = useCallback((target: { text: string } & Partial<SyncTeXSourceLocation>) => {
     setLeftTab('source');
     setLeftOpen(true);
-    setSyncToSource({ text, nonce: Date.now() });
+    setSyncToSource({ ...target, nonce: Date.now() });
   }, []);
   const onSyncToPdf = useCallback((text: string) => { setSyncToPdf({ text, nonce: Date.now() }); }, []);
   const onPreviewVersion = useCallback((sha: string, title: string) => {
