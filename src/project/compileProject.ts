@@ -187,9 +187,27 @@ export async function compileProject(opts: CompileProjectOptions): Promise<Compi
   };
 }
 
-// Pick an engine from the preamble: fontspec/unicode-math need xe/lua; otherwise
-// default to xelatex (broadest font/UTF-8 support, matches modern Overleaf defaults).
-function detectEngine(src: string): Engine {
-  if (/\\usepackage\{(fontspec|unicode-math)\}/.test(src)) return 'xelatex';
-  return 'xelatex';
+// Pick an engine from the preamble. Ordinary LaTeX and pdfTeX-specific commands
+// belong on pdfLaTeX; fontspec/unicode-math require Xe/Lua. An editor magic
+// comment wins when the author supplied one. The old implementation returned
+// xelatex for every document, which made an unguarded glyphtounicode preamble
+// fail with hundreds of undefined \pdfglyphtounicode commands.
+export function detectEngine(src: string): Engine {
+  const declared = src.match(/^\s*%\s*!\s*TEX\s+(?:TS-)?program\s*=\s*(pdf|xe|lua)latex\b/im)?.[1];
+  if (declared === 'pdf') return 'pdflatex';
+  if (declared === 'lua') return 'lualatex';
+  if (declared === 'xe') return 'xelatex';
+
+  // Ignore disabled package lines. This intentionally stays lightweight: it is
+  // an engine hint, not a TeX parser, and only the main preamble is inspected.
+  const active = src.replace(/(^|[^\\])%.*/gm, '$1');
+  if (/\\(?:directlua|luatexversion)\b/.test(active)
+      || /\\(?:usepackage|RequirePackage)(?:\s*\[[^\]]*\])?\s*\{[^}]*(?:luacode|luaotfload)[^}]*\}/.test(active)) {
+    return 'lualatex';
+  }
+  if (/\\XeTeX\w*/.test(active)
+      || /\\(?:usepackage|RequirePackage)(?:\s*\[[^\]]*\])?\s*\{[^}]*(?:fontspec|unicode-math|mathspec|xltxtra|xunicode)[^}]*\}/.test(active)) {
+    return 'xelatex';
+  }
+  return 'pdflatex';
 }

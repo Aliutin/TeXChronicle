@@ -12,7 +12,7 @@ export const renderPreviewInputSchema = {
   engine: z
     .enum(['pdflatex', 'xelatex', 'lualatex'])
     .optional()
-    .describe('TeX engine. Defaults to xelatex.'),
+    .describe('TeX engine. Auto-detected from editor directives and the preamble when omitted; ordinary documents default to pdflatex.'),
   shellEscape: z
     .boolean()
     .optional()

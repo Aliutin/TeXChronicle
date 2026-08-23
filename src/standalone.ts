@@ -28,7 +28,7 @@ Usage:
 
 Options:
   -p, --project <directory>    Project root (default: current directory)
-      --engine <name>          xelatex, pdflatex, or lualatex (default: xelatex)
+      --engine <name>          xelatex, pdflatex, or lualatex (default: auto-detect)
       --backend <name>         auto, system, or wasm (default: auto)
       --shell-escape           Permit shell escape with the system backend
       --no-open                Print the URL without launching a browser
