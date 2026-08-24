@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { readTextFile, writeTextFile, deleteEntry, renameEntry, createTextFile, resolveAssetFile } from '../src/preview/filesApi.js';
 
 // Every one of these endpoints takes a path from an HTTP query string and reads
@@ -52,6 +53,29 @@ test('project artwork resolves with omitted extensions and included-file paths',
 test('project artwork cannot escape through traversal', async () => {
   const { root } = project();
   await assert.rejects(() => resolveAssetFile(root, '../secrets/id_rsa.png'), /outside/);
+});
+
+test('a nested LaTeX draft can preview sibling artwork inside its Git project', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'magictex-asset-repo-'));
+  const repository = join(base, 'repository');
+  const root = join(repository, 'paper', 'draft');
+  const figures = join(repository, 'paper', 'figures');
+  mkdirSync(root, { recursive: true });
+  mkdirSync(figures, { recursive: true });
+  execFileSync('git', ['init', '--quiet'], { cwd: repository, windowsHide: true });
+  writeFileSync(join(root, 'main.tex'), '\\includegraphics{../figures/map.pdf}\n');
+  writeFileSync(join(figures, 'map.pdf'), Buffer.from('%PDF-1.4'));
+
+  const sibling = await resolveAssetFile(root, '../figures/map.pdf', 'main.tex');
+  assert.equal(sibling.fullPath, join(figures, 'map.pdf'));
+
+  const outside = join(base, 'private.png');
+  writeFileSync(outside, 'PRIVATE IMAGE');
+  await assert.rejects(
+    () => resolveAssetFile(root, '../../../private.png', 'main.tex'),
+    /outside/,
+    `an asset escaped the Git project into ${dirname(outside)}`,
+  );
 });
 
 test('a symlinked FILE cannot be read out of the project', async (t) => {

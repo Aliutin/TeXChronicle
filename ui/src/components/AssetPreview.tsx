@@ -134,7 +134,7 @@ export function AssetPreview({ selection, refreshKey, onClose }: {
           reloadTick={refreshKey}
           pdfUrl={url}
           comments={[]}
-          missingMessage="This PDF is missing or outside the selected project root. Move it into the project to preview it safely."
+          missingMessage="This PDF is missing or outside the selected project and its enclosing Git repository."
         />
       ) : showImage ? (
         <div className="asset-image-scroll">

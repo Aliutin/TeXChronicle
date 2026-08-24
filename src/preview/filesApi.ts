@@ -4,6 +4,7 @@
 // same live loop as any other edit (Claude's or an external editor's).
 import { readdir, readFile, writeFile, mkdir, rename, rm, stat, realpath } from 'node:fs/promises';
 import { dirname, join, normalize, posix, relative, resolve, sep } from 'node:path';
+import { gitOrNull } from '../git/exec.js';
 
 const TEXT_EXT = /\.(tex|bib|cls|sty|bst|cfg|clo|def|ldf|fd|bbx|cbx|lbx|txt|md)$/i;
 // Figures/assets: shown in the tree (not editable) and allowed for upload.
@@ -15,6 +16,7 @@ const MAX_FILES = 500;
 const MAX_FILE_BYTES = 4 * 1024 * 1024;  // 4 MB per LaTeX source
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 MB per uploaded figure
 const ASSET_EXTENSIONS = ['.pdf', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.eps'];
+const assetBoundaryCache = new Map<string, Promise<string>>();
 
 const toPosix = (p: string) => p.split(sep).join('/');
 
@@ -148,29 +150,61 @@ export async function readTextFile(root: string, rel: string): Promise<string> {
 
 export interface ResolvedAssetFile { fullPath: string; relativePath: string }
 
-/** Resolve an image/PDF for browser display without ever widening the project
- * boundary. TeX accepts an omitted graphics extension, and included source
- * files commonly use `../figures/x.pdf`; the latter is allowed only when it
- * normalizes back inside the selected project root. */
+/** A paper is often launched from `repo/paper/draft`, while its TeX source uses
+ * `../figures/map.pdf`. Editing and history must remain scoped to `draft`, but a
+ * read-only artwork route needs the enclosing repository as its natural safety
+ * boundary. Plain folders have no such wider boundary and stay project-local. */
+async function assetBoundary(root: string): Promise<string> {
+  const rootAbs = normalize(resolve(root));
+  let pending = assetBoundaryCache.get(rootAbs);
+  if (!pending) {
+    pending = (async () => {
+      const repository = (await gitOrNull(rootAbs, ['rev-parse', '--show-toplevel']))?.trim();
+      if (!repository) return rootAbs;
+      const repositoryAbs = normalize(resolve(repository));
+      return rootAbs === repositoryAbs || rootAbs.startsWith(repositoryAbs + sep)
+        ? repositoryAbs
+        : rootAbs;
+    })();
+    assetBoundaryCache.set(rootAbs, pending);
+  }
+  return pending;
+}
+
+/** Resolve an image/PDF for browser display. TeX accepts an omitted graphics
+ * extension and papers commonly keep figures beside the selected draft folder.
+ * Such sibling assets are allowed only inside the enclosing Git work tree; the
+ * existing realpath guard still prevents symlinks from escaping that boundary. */
 export async function resolveAssetFile(root: string, rel: string, from?: string): Promise<ResolvedAssetFile> {
   const raw = String(rel).trim().replace(/\\/g, '/');
   if (!raw) throw new Error('invalid path');
+  if (posix.isAbsolute(raw) || /^[a-z]:\//i.test(raw)) throw new Error('path outside project');
 
-  const inside = (value: string): string | null => {
-    if (!value || posix.isAbsolute(value) || /^[a-z]:\//i.test(value)) return null;
-    const candidate = posix.normalize(value).replace(/^\.\//, '');
-    if (!candidate || candidate === '.' || candidate === '..' || candidate.startsWith('../')) return null;
-    return candidate;
+  const boundary = await assetBoundary(root);
+  const boundaryAbs = normalize(resolve(boundary));
+  const bases: string[] = [];
+  const addBase = (baseDir: string): void => {
+    const absolute = normalize(resolve(baseDir, raw));
+    if (absolute !== boundaryAbs && !absolute.startsWith(boundaryAbs + sep)) return;
+    const candidate = toPosix(relative(boundaryAbs, absolute));
+    if (candidate && !bases.includes(candidate)) bases.push(candidate);
   };
 
-  const bases: string[] = [];
-  const direct = inside(raw);
-  if (direct) bases.push(direct);
+  // Graphics paths are normally relative to the compiler's working directory,
+  // which is the selected project root.
+  addBase(root);
+
+  // Packages such as import/subfiles make a path relative to an included TeX
+  // file. Preserve that useful fallback, but first prove `from` itself is a
+  // regular source path inside the selected project.
   if (from) {
-    const source = inside(String(from).replace(/\\/g, '/'));
-    if (source) {
-      const besideSource = inside(posix.join(posix.dirname(source), raw));
-      if (besideSource && !bases.includes(besideSource)) bases.push(besideSource);
+    const source = String(from).trim().replace(/\\/g, '/');
+    const normalizedSource = posix.normalize(source).replace(/^\.\//, '');
+    if (normalizedSource && normalizedSource !== '.' && normalizedSource !== '..' &&
+        !normalizedSource.startsWith('../') && !posix.isAbsolute(normalizedSource) &&
+        !/^[a-z]:\//i.test(normalizedSource)) {
+      const sourceFull = await guardPath(root, normalizedSource, true);
+      addBase(dirname(sourceFull));
     }
   }
   if (!bases.length) throw new Error('path outside project');
@@ -187,7 +221,7 @@ export async function resolveAssetFile(root: string, rel: string, from?: string)
   }
 
   for (const candidate of candidates) {
-    const fullPath = await guardPath(root, candidate);
+    const fullPath = await guardPath(boundaryAbs, candidate);
     try {
       const info = await stat(fullPath);
       if (info.isFile()) return { fullPath, relativePath: candidate };
