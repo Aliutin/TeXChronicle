@@ -303,6 +303,7 @@ export default function App() {
                 showInlineDiff={workspaceView === 'split'}
                 onSelectionChange={onHistorySelection}
                 onDiffChange={onHistoryDiff}
+                liveStatus={status}
               />
             </ErrorBoundary>
           </div>

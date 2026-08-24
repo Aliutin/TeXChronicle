@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCheckpoint, createCheckpointFromPrepared, listCheckpoints, prepareCheckpoint } from '../src/git/checkpoints.js';
@@ -143,5 +144,45 @@ Old text.
     forgetSectionGraph();
     forgetHistoryRepo();
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('semantic history works when the TeX project is nested inside a larger Git repository', async () => {
+  const repository = mkdtempSync(join(tmpdir(), 'magictex-nested-repo-'));
+  const root = join(repository, 'paper', 'draft');
+  try {
+    execFileSync('git', ['init', '--quiet'], { cwd: repository });
+    mkdirSync(root, { recursive: true });
+    forgetHistoryRepo();
+    forgetSectionGraph();
+    writeFileSync(join(root, 'dated-paper.tex'), String.raw`\documentclass{article}
+\begin{document}
+\section{Introduction}
+Original nested-project prose.
+\end{document}`);
+    const first = await createCheckpoint(root);
+    assert.ok(first.sha);
+    await saveRenderArtifact(root, first.sha!, new Uint8Array(Buffer.from('%PDF-1.7\n')), {
+      mainFile: 'dated-paper.tex', engine: 'pdflatex', backend: 'system',
+    });
+
+    writeFileSync(join(root, 'dated-paper.tex'), String.raw`\documentclass{article}
+\begin{document}
+\section{Introduction}
+Revised nested-project prose.
+\end{document}`);
+    const second = await createCheckpoint(root);
+    assert.ok(second.sha);
+
+    const history = await listSectionHistory(root);
+    assert.equal(history.checkpointCount, 2);
+    assert.deepEqual(history.sections.map((section) => section.title), ['Introduction']);
+    assert.equal(history.sections[0].versions.length, 2);
+    assert.equal(history.sections[0].versions[0].path, 'dated-paper.tex',
+      'section paths remain relative to the TeX project, not its parent Git repository');
+  } finally {
+    forgetSectionGraph();
+    forgetHistoryRepo();
+    rmSync(repository, { recursive: true, force: true });
   }
 });

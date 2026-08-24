@@ -12,6 +12,7 @@ import {
   restoreSection,
   type Checkpoint,
   type HistoryMode,
+  type Status,
   type SectionHistoryPayload,
   type SectionVersion,
 } from '../api';
@@ -47,12 +48,14 @@ export function HistoryPanel({
   showInlineDiff = true,
   onSelectionChange,
   onDiffChange,
+  liveStatus,
 }: {
   reloadTick: number;
   onPreviewVersion?: (sha: string, title: string) => void;
   showInlineDiff?: boolean;
   onSelectionChange?: (selection: HistorySelection) => void;
   onDiffChange?: (detail: HistoryDiffDetail) => void;
+  liveStatus?: Status;
 }) {
   const [isRepo, setIsRepo] = useState<boolean | null>(null);
   const [mode, setMode] = useState<HistoryMode | null>(null);
@@ -209,7 +212,12 @@ export function HistoryPanel({
     );
   }
   if (!items.length) {
-    return <div className="panel-hint">No checkpoints yet. One is saved automatically after each successful compile.</div>;
+    const message = liveStatus === 'compiling'
+      ? 'Initial compile in progress. The first PDF and History checkpoint will appear together after it succeeds.'
+      : liveStatus === 'error'
+        ? 'No successful compile yet. Fix the compile error, then the first successful PDF will create the first checkpoint automatically.'
+        : 'Waiting for the first successful compile. Its source and exact PDF will become checkpoint 1 automatically.';
+    return <div className="panel-hint">{message}</div>;
   }
 
   const baseLevel = semantic?.sections.filter((candidate) => candidate.present).reduce((min, candidate) => Math.min(min, candidate.level), 9) ?? 0;

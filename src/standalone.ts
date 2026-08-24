@@ -153,6 +153,7 @@ async function main(): Promise<void> {
     });
   }
 
+  console.log('[MagicTeX] initial compile running — the first PDF and History checkpoint appear together after it succeeds.');
   const result = await requestCompile();
   const errors = result.verdict?.errors.length ?? 0;
   if (result.success && errors === 0) {

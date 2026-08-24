@@ -33,7 +33,7 @@
 // themselves.
 import { createHash } from 'node:crypto';
 import { mkdir, access, rename, cp, rm, readFile, writeFile, realpath } from 'node:fs/promises';
-import { join, dirname, extname } from 'node:path';
+import { join, dirname, extname, resolve } from 'node:path';
 import { cacheRoot } from '../engine/assetsDir.js';
 import { git, gitOrNull } from './exec.js';
 
@@ -85,6 +85,18 @@ async function hasGit(): Promise<boolean> {
 const exists = async (p: string): Promise<boolean> => {
   try { await access(p); return true; } catch { return false; }
 };
+
+/** Compare work-tree roots through real paths. A TeX project may sit inside a
+ * much larger Git repository; that does not make the whole repository this
+ * MagicTeX project. On Windows the same directory can differ only by case. */
+async function sameDirectory(a: string, b: string): Promise<boolean> {
+  const canonical = async (path: string): Promise<string> => {
+    const real = await realpath(path).catch(() => resolve(path));
+    const clean = resolve(real).replace(/[\\/]+$/, '');
+    return process.platform === 'win32' ? clean.toLowerCase() : clean;
+  };
+  return await canonical(a) === await canonical(b);
+}
 
 /** A repo directory that is really there, not just a leftover empty folder. */
 const isRepo = (dir: string): Promise<boolean> => exists(join(dir, 'HEAD'));
@@ -211,10 +223,13 @@ export async function historyRepo(root: string): Promise<HistoryRepo> {
     return NO_GIT;
   }
 
-  // An existing repo keeps the current behaviour: checkpoints sit on a hidden
-  // ref inside it, so they survive a clone and live beside the author's own
-  // history rather than in a directory they'd never find.
-  if ((await gitOrNull(root, ['rev-parse', '--git-dir'])) !== null) {
+  // Use an author's repository only when its work-tree root is exactly the
+  // MagicTeX project root. A paper in `monorepo/papers/draft` must not share one
+  // hidden ref with every sibling project, and Git object paths there are
+  // repository-relative rather than project-relative. A project-local shadow
+  // repo keeps its paths, restores and Dropbox portability self-contained.
+  const repositoryRoot = (await gitOrNull(root, ['rev-parse', '--show-toplevel']))?.trim();
+  if (repositoryRoot && await sameDirectory(root, repositoryRoot)) {
     await ignoreToolStorage(root);
     const resolved: HistoryRepo = { mode: 'project', env: { ...IDENTITY } };
     cache.set(root, resolved);

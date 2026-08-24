@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { historyRepo, forgetHistoryRepo } from '../src/git/historyRepo.js';
@@ -65,5 +65,25 @@ test('an existing git repo is left alone', async () => {
   } finally {
     forgetHistoryRepo();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a project nested inside a larger git repo gets its own portable history', async () => {
+  forgetHistoryRepo();
+  const repository = mkdtempSync(join(tmpdir(), 'hr-parent-repo-'));
+  const project = join(repository, 'papers', 'draft');
+  const { execFileSync } = await import('node:child_process');
+  try {
+    execFileSync('git', ['init', '--quiet'], { cwd: repository });
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, 'main.tex'), '');
+    const r = await historyRepo(project);
+    assert.equal(r.mode, 'shadow');
+    assert.equal(r.env.GIT_DIR, join(project, '.latex-preview', 'history.git'));
+    assert.equal(r.env.GIT_WORK_TREE, project,
+      'the paper history must not be rooted at the parent repository');
+  } finally {
+    forgetHistoryRepo();
+    rmSync(repository, { recursive: true, force: true });
   }
 });
