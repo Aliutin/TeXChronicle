@@ -447,7 +447,7 @@ export function PdfView({
       // accepted → yellow, suggested → purple dashed, resolved → GREEN (the AI
       // did it, awaiting your review). Closing a resolved comment removes it and
       // its highlight — that's the "human-confirmed" step, so colors don't pile up.
-      const statusCls = c.status === 'resolved' ? 'hl-resolved' : c.status === 'suggested' ? 'hl-suggested' : '';
+      const statusCls = c.restoreReview ? 'hl-review' : c.status === 'resolved' ? 'hl-resolved' : c.status === 'suggested' ? 'hl-suggested' : '';
       // `?.` is deliberate: the store normalizes this, but the PDF pane must not
       // be the thing that dies if a comment ever reaches it without coords.
       if (c.rects?.length) {

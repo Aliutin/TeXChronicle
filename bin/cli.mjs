@@ -36,12 +36,24 @@ if (isBelowFloor(process.versions.node, range)) {
   const command = process.argv[2];
   if (command === 'preview' || command === 'open') {
     await import(new URL('../src/standalone.ts', import.meta.url).href);
+  } else if (command === 'install-launcher') {
+    try {
+      const { installDesktopLauncher } = await import(new URL('../src/installLauncher.ts', import.meta.url).href);
+      const paths = await installDesktopLauncher();
+      console.log('[MagicTeX] Installed one-click launchers:');
+      for (const path of paths) console.log(`  ${path}`);
+      console.log('[MagicTeX] Click MagicTeX and choose the main .tex file, or drag a .tex file onto the desktop shortcut.');
+    } catch (error) {
+      console.error(`[MagicTeX] ${String(error && error.message || error)}`);
+      process.exitCode = 1;
+    }
   } else if (command === '--help' || command === '-h') {
     console.log(`MagicTeX — local LaTeX workspace and MCP server
 
 Usage:
   magictex preview [main.tex] [options]   Open the standalone editor
-  magictex open [main.tex] [options]      Alias for preview
+  magictex open [main.tex] [options]      Choose a .tex file when omitted
+  magictex install-launcher               Add one-click shortcuts (Windows)
   magictex-mcp                            Start the MCP server on stdio
 
 Run "magictex preview --help" for standalone options.`);

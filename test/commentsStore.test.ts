@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { addComment, listComments, updateComment, addReply, deleteComment } from '../src/preview/commentsStore.js';
+import { addComment, listComments, updateComment, addReply, deleteComment, markCommentsForRestoreReview } from '../src/preview/commentsStore.js';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'cs-'));
 
@@ -28,6 +28,31 @@ test('reviewer suggestion → accept → resolve', async () => {
     const done = (await listComments(d))[0];
     assert.equal(done.status, 'resolved');
     assert.equal(done.resolvedNote, 'done');
+  } finally { rmSync(d, { recursive: true, force: true }); }
+});
+
+test('comment creation and resolution retain their successful checkpoints', async () => {
+  const d = tmp();
+  try {
+    const c = await addComment(d, {
+      page: 1, quote: 'q', rects: [], text: 'fix', createdCheckpoint: 'a'.repeat(40),
+    });
+    await updateComment(d, c.id, {
+      status: 'resolved', resolvedNote: 'done', resolvedCheckpoint: 'b'.repeat(40),
+    });
+    const done = (await listComments(d))[0];
+    assert.equal(done.createdCheckpoint, 'a'.repeat(40));
+    assert.equal(done.resolvedCheckpoint, 'b'.repeat(40));
+
+    await markCommentsForRestoreReview(d, [c.id], {
+      checkpoint: 'a'.repeat(40), scope: 'project', at: new Date().toISOString(),
+    });
+    assert.equal((await listComments(d))[0].restoreReview?.scope, 'project');
+
+    await updateComment(d, c.id, { status: 'accepted' });
+    const reopened = (await listComments(d))[0];
+    assert.equal(reopened.resolvedCheckpoint, undefined);
+    assert.equal(reopened.restoreReview, undefined);
   } finally { rmSync(d, { recursive: true, force: true }); }
 });
 

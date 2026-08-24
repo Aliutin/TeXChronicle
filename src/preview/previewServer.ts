@@ -15,17 +15,45 @@ import { refuseReason, allowWebSocket } from './originGuard.js';
 import { hostPageHtml } from '../engine/hostPage.js';
 import { viewerPageHtml } from './viewerPage.js';
 import { diffViewHtml } from './diffViewPage.js';
-import { canTrackHistory, historyStatus, listCheckpoints, getCheckpointDiff, getWorkingDiff, restoreCheckpoint, restoreFile } from '../git/checkpoints.js';
+import { canTrackHistory, historyStatus, listCheckpoints, getCheckpointDiff, getWorkingDiff, restoreCheckpoint, restoreFile, latestCheckpointSha, matchingCheckpointSha } from '../git/checkpoints.js';
 import { listSectionHistory, getSectionDiff, restoreSection } from '../git/sectionHistory.js';
 import { readRenderArtifact } from '../git/renderArtifacts.js';
 import { listTextFiles, readTextFile, writeTextFile, listTree, createTextFile, createDir, renameEntry, deleteEntry, writeUpload, resolveAssetFile, resolveIncludeFile } from './filesApi.js';
 import { suppressNextChange } from '../watch/fileWatcher.js';
-import { listComments, addComment, updateComment, deleteComment, addReply } from './commentsStore.js';
+import { listComments, addComment, updateComment, deleteComment, addReply, markCommentsForRestoreReview, type RestoreScope } from './commentsStore.js';
 import { getGitHubRemote } from '../git/remote.js';
 import { buildOverleafZip } from '../export/overleafZip.js';
 import { resolveMainFile } from '../project/resolveMainFile.js';
 import { getProjectRoot } from '../session.js';
 import { busytexDir } from '../engine/assetsDir.js';
+
+/** A restore intentionally leaves the independent comment store alone. When it
+ * targets a checkpoint older than a comment's resolution, mark that card for
+ * verification: the old source may have brought the original problem back. */
+async function flagCommentsAfterOlderRestore(
+  root: string,
+  checkpoint: string,
+  scope: RestoreScope,
+  label?: string,
+): Promise<number> {
+  const [history, comments] = await Promise.all([listCheckpoints(root), listComments(root)]);
+  const position = new Map(history.map((item, index) => [item.sha, index]));
+  const restoredAt = position.get(checkpoint);
+  if (restoredAt === undefined) return 0;
+  const ids = comments
+    .filter((comment) => {
+      if (comment.status !== 'resolved' || !comment.resolvedCheckpoint) return false;
+      const resolvedAt = position.get(comment.resolvedCheckpoint);
+      return resolvedAt !== undefined && resolvedAt < restoredAt;
+    })
+    .map((comment) => comment.id);
+  return markCommentsForRestoreReview(root, ids, {
+    checkpoint,
+    scope,
+    ...(label ? { label } : {}),
+    at: new Date().toISOString(),
+  });
+}
 import { inverseSyncTeX } from './synctex.js';
 
 const PKG_ROOT = fileURLToPath(new URL('../..', import.meta.url));
@@ -198,7 +226,10 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
       const sha = reqUrl.searchParams.get('sha') ?? '';
       const section = reqUrl.searchParams.get('section') ?? '';
       try {
-        const restored = await restoreSection(getProjectRoot(), section, sha);
+        const root = getProjectRoot();
+        const restored = await restoreSection(root, section, sha);
+        const marked = await flagCommentsAfterOlderRestore(root, sha, 'section', section);
+        if (marked) send({ type: 'comments-changed' });
         const { requestCompile } = await import('../coordinator.js');
         requestCompile().catch(() => {});
         return json(res, { ok: true, ...restored });
@@ -224,7 +255,10 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
     if (pathname === '/git/restore' && req.method === 'POST') {
       const sha = reqUrl.searchParams.get('sha') ?? '';
       try {
-        await restoreCheckpoint(getProjectRoot(), sha);
+        const root = getProjectRoot();
+        await restoreCheckpoint(root, sha);
+        const marked = await flagCommentsAfterOlderRestore(root, sha, 'project');
+        if (marked) send({ type: 'comments-changed' });
         const { requestCompile } = await import('../coordinator.js');
         requestCompile().catch(() => {});
         return json(res, { ok: true });
@@ -237,7 +271,10 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
       const sha = reqUrl.searchParams.get('sha') ?? '';
       const path = reqUrl.searchParams.get('path') ?? '';
       try {
-        await restoreFile(getProjectRoot(), sha, path);
+        const root = getProjectRoot();
+        await restoreFile(root, sha, path);
+        const marked = await flagCommentsAfterOlderRestore(root, sha, 'file', path);
+        if (marked) send({ type: 'comments-changed' });
         const { requestCompile } = await import('../coordinator.js');
         requestCompile().catch(() => {});
         return json(res, { ok: true });
@@ -254,7 +291,11 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
         if (req.method === 'POST') {
           const chunks: Buffer[] = [];
           for await (const c of req) chunks.push(c as Buffer);
-          const created = await addComment(root, JSON.parse(Buffer.concat(chunks).toString('utf8')));
+          const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          const created = await addComment(root, {
+            ...input,
+            createdCheckpoint: await latestCheckpointSha(root),
+          });
           send({ type: 'comments-changed' });
           return json(res, created);
         }
@@ -262,7 +303,19 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
           const id = reqUrl.searchParams.get('id') ?? '';
           const chunks: Buffer[] = [];
           for await (const c of req) chunks.push(c as Buffer);
-          const updated = await updateComment(root, id, JSON.parse(Buffer.concat(chunks).toString('utf8')));
+          const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          // Checkpoint ids are server-derived, never accepted from browser JSON.
+          const patch = {
+            ...(input.status !== undefined ? { status: input.status } : {}),
+            ...(input.text !== undefined ? { text: input.text } : {}),
+            ...(input.resolvedNote !== undefined ? { resolvedNote: input.resolvedNote } : {}),
+            ...(input.restoreReview === null ? { restoreReview: null } : {}),
+          };
+          if (input.status === 'resolved') {
+            const current = await matchingCheckpointSha(root);
+            if (current.sha) Object.assign(patch, { resolvedCheckpoint: current.sha });
+          }
+          const updated = await updateComment(root, id, patch);
           if (!updated) { res.writeHead(404, ISOLATION_HEADERS).end('unknown comment'); return; }
           send({ type: 'comments-changed' });
           return json(res, updated);

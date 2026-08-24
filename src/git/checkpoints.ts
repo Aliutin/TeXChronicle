@@ -137,6 +137,35 @@ export async function createCheckpoint(root: string): Promise<CheckpointResult> 
   return withLock(root, () => createCheckpointUnlocked(root));
 }
 
+/** The tip of the successful-render history, whether or not files have since
+ * changed. Useful for anchoring a comment created on the currently shown PDF. */
+export async function latestCheckpointSha(root: string): Promise<string | undefined> {
+  const { env: ENV, mode } = await historyRepo(root);
+  if (mode !== 'project' && mode !== 'shadow') return undefined;
+  return (await gitOrNull(root, ['rev-parse', '--verify', '-q', REF], ENV))?.trim() || undefined;
+}
+
+/** The latest checkpoint only when it describes the files on disk right now.
+ * Resolution uses this stricter form: a dirty or failed build must not be
+ * labelled as the successful version that preceded it. */
+export async function matchingCheckpointSha(root: string): Promise<{ sha?: string; dirty: boolean }> {
+  return withLock(root, async () => {
+    const { env: ENV, mode } = await historyRepo(root);
+    if (mode !== 'project' && mode !== 'shadow') return { dirty: false };
+    const sha = (await gitOrNull(root, ['rev-parse', '--verify', '-q', REF], ENV))?.trim() || undefined;
+    if (!sha) return { dirty: false };
+    try {
+      const [currentTree, checkpointTree] = await Promise.all([
+        writeCurrentTree(root, ENV),
+        git(root, ['rev-parse', `${sha}^{tree}`], ENV).then((value) => value.trim()),
+      ]);
+      return currentTree === checkpointTree ? { sha, dirty: false } : { dirty: true };
+    } catch {
+      return { dirty: true };
+    }
+  });
+}
+
 /**
  * Capture the source tree immediately before a compile. This writes Git objects
  * but no commit/ref, so a failed compile never appears in History.

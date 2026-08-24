@@ -18,7 +18,7 @@ import { getPreview, peekPreview, captureDiff, shutdownEngine } from './engine/b
 import { setConfig, requestCompile } from './coordinator.js';
 import { setProjectRoot } from './session.js';
 import { startWatching, stopWatching } from './watch/fileWatcher.js';
-import { canTrackHistory, historyStatus, listCheckpoints } from './git/checkpoints.js';
+import { canTrackHistory, historyStatus, listCheckpoints, latestCheckpointSha, matchingCheckpointSha } from './git/checkpoints.js';
 import { type Engine, type Backend } from './project/compileProject.js';
 import { MainFileError } from './project/resolveMainFile.js';
 import { summarizeErrors } from './project/parseLog.js';
@@ -208,7 +208,9 @@ server.registerTool(CHECK_COMMENTS_NAME, checkCommentsConfig, async ({ includeRe
     return `[id: ${c.id}]${who} p.${c.page} — "${c.quote.slice(0, 160)}${c.quote.length > 160 ? '…' : ''}"${loc}\n  → ${c.text}${thread}`;
   };
   const fmtPlain = (c: (typeof all)[number]) =>
-    `[id: ${c.id}] p.${c.page} — "${c.quote.slice(0, 160)}${c.quote.length > 160 ? '…' : ''}"\n  → ${c.text}`;
+    `[id: ${c.id}] p.${c.page} — "${c.quote.slice(0, 160)}${c.quote.length > 160 ? '…' : ''}"\n  → ${c.text}` +
+    (c.resolvedCheckpoint ? `\n  ✓ resolved at ${c.resolvedCheckpoint.slice(0, 10)}` : '') +
+    (c.restoreReview ? `\n  ⚠ verify again: an older ${c.restoreReview.scope} version was restored afterward` : '');
   const awaiting = suggested.length
     ? `\n\n(${suggested.length} reviewer suggestion${suggested.length === 1 ? '' : 's'} still ${suggested.length === 1 ? 'awaits' : 'await'} the human's accept in the workspace — not actionable yet.)`
     : '';
@@ -228,7 +230,18 @@ server.registerTool(CHECK_COMMENTS_NAME, checkCommentsConfig, async ({ includeRe
 server.registerTool(RESOLVE_COMMENT_NAME, resolveCommentConfig, async ({ id, note }) => {
   const projectRoot = process.cwd();
   setProjectRoot(projectRoot);
-  const updated = await updateComment(projectRoot, id, { status: 'resolved', resolvedNote: note });
+  const current = await matchingCheckpointSha(projectRoot);
+  if (current.dirty) {
+    return {
+      isError: true,
+      content: [{ type: 'text', text: '✖ This source is not the latest successful checkpoint yet. Wait for the current compile (or fix its error), then resolve the comment so its resolution is linked to the version that actually rendered.' }],
+    };
+  }
+  const updated = await updateComment(projectRoot, id, {
+    status: 'resolved',
+    resolvedNote: note,
+    ...(current.sha ? { resolvedCheckpoint: current.sha } : {}),
+  });
   if (!updated) {
     return { isError: true, content: [{ type: 'text', text: `✖ Unknown comment id: ${id}` }] };
   }
@@ -248,6 +261,7 @@ server.registerTool(ADD_COMMENT_NAME, addCommentConfig, async ({ quote, comment,
     text: comment,
     role: role ?? 'reviewer',
     status: accepted ? 'accepted' : 'suggested',
+    createdCheckpoint: await latestCheckpointSha(projectRoot),
   });
   try { peekPreview()?.broadcast({ type: 'comments-changed' }); } catch { /* no viewer */ }
   const where = accepted

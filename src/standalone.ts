@@ -3,7 +3,7 @@
 // history loop directly from a terminal, without an LLM or MCP client.
 import { existsSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import open from 'open';
@@ -12,6 +12,7 @@ import { getPreview, shutdownEngine } from './engine/browserHost.js';
 import { summarizeErrors } from './project/parseLog.js';
 import type { Backend, Engine } from './project/compileProject.js';
 import { startWatching, stopWatching } from './watch/fileWatcher.js';
+import { chooseMainTex, resolveLaunchTarget } from './launcher.js';
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const ENGINES = new Set<Engine>(['xelatex', 'pdflatex', 'lualatex']);
@@ -24,6 +25,8 @@ const HELP = `Open a MagicTeX workspace without an LLM.
 
 Usage:
   magictex preview [main.tex] [options]
+  magictex open                       Choose a .tex file in a native dialog
+  magictex install-launcher           Add Desktop + Start-menu shortcuts (Windows)
   magictex-mcp preview [main.tex] [options]
 
 Options:
@@ -36,6 +39,7 @@ Options:
 
 Examples:
   magictex preview main.tex
+  magictex open
   magictex preview -p "C:\\papers\\study" paper.tex
 
 Keep this terminal open while editing. Press Ctrl+C to stop MagicTeX.`;
@@ -61,7 +65,12 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
   process.on(signal, () => shutdownAndExit(signal));
 }
 
-function enableLifecycleMonitoring(): void {
+function enableLifecycleMonitoring(desktopMode = false): void {
+  // Explorer gives a directly-launched console process no durable stdin and a
+  // long-lived explorer.exe parent. Neither is a meaningful lifetime signal.
+  // In desktop mode the visible status window is the stop control: closing it
+  // terminates Node and the OS releases the local listener.
+  if (desktopMode) return;
   // On Windows a terminal wrapper can receive Ctrl+C itself and disappear
   // without forwarding SIGINT to Node. Its stdin pipe usually closes.
   process.stdin.resume();
@@ -92,6 +101,7 @@ async function main(): Promise<void> {
         backend: { type: 'string' },
         'shell-escape': { type: 'boolean' },
         'no-open': { type: 'boolean' },
+        desktop: { type: 'boolean' },
         help: { type: 'boolean', short: 'h' },
       },
     });
@@ -117,20 +127,20 @@ async function main(): Promise<void> {
   }
 
   const projectOption = typeof parsed.values.project === 'string' ? parsed.values.project : undefined;
-  const projectRoot = resolve(projectOption ?? process.cwd());
+  let rawMain: string | undefined = parsed.positionals[0];
+  if (process.argv[2] === 'open' && !rawMain && !projectOption) {
+    rawMain = await chooseMainTex(process.cwd()) ?? undefined;
+    if (!rawMain) {
+      console.log('[MagicTeX] No file selected.');
+      return;
+    }
+  }
+  const { projectRoot, mainFile } = resolveLaunchTarget(process.cwd(), projectOption, rawMain);
   const projectInfo = await stat(projectRoot).catch(() => null);
   if (!projectInfo?.isDirectory()) throw new Error(`Project directory does not exist: ${projectRoot}`);
 
-  const rawMain = parsed.positionals[0];
-  if (rawMain && isAbsolute(rawMain)) {
-    throw new Error('The main file must be relative to the project root. Use --project for its directory.');
-  }
-  const mainFile = rawMain ? relative(projectRoot, resolve(projectRoot, rawMain)).replace(/\\/g, '/') : undefined;
-  if (mainFile && (mainFile === '..' || mainFile.startsWith('../') || isAbsolute(mainFile))) {
-    throw new Error('The main file must stay inside the project root.');
-  }
-
-  enableLifecycleMonitoring();
+  const desktopMode = parsed.values.desktop === true;
+  enableLifecycleMonitoring(desktopMode);
   setConfig({
     projectRoot,
     mainFile,
@@ -146,7 +156,9 @@ async function main(): Promise<void> {
 
   console.log(`[MagicTeX] project: ${projectRoot}`);
   console.log(`[MagicTeX] workspace: ${workspaceUrl}`);
-  console.log('[MagicTeX] watching for edits; press Ctrl+C to stop.');
+  console.log(desktopMode
+    ? '[MagicTeX] watching for edits; close this window to stop.'
+    : '[MagicTeX] watching for edits; press Ctrl+C to stop.');
   if (!parsed.values['no-open']) {
     await open(workspaceUrl).catch((error) => {
       console.warn(`[MagicTeX] could not open the browser: ${(error as Error).message}`);

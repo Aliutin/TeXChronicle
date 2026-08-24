@@ -73,6 +73,12 @@ export interface CommentRect { x: number; y: number; w: number; h: number }
 export type CommentStatus = 'suggested' | 'accepted' | 'resolved';
 export type CommentRole = 'human' | 'reviewer' | 'defender' | 'author';
 export interface Reply { by: CommentRole; text: string; at: string }
+export interface RestoreReview {
+  checkpoint: string;
+  scope: 'project' | 'section' | 'file';
+  label?: string;
+  at: string;
+}
 export interface Comment {
   id: string;
   page: number;
@@ -83,7 +89,11 @@ export interface Comment {
   role?: CommentRole;
   replies?: Reply[];
   created: string;
+  createdCheckpoint?: string;
   resolvedNote?: string;
+  resolvedAt?: string;
+  resolvedCheckpoint?: string;
+  restoreReview?: RestoreReview;
 }
 
 /**
@@ -122,7 +132,7 @@ export async function createComment(input: { page: number; quote: string; rects:
   await fetch('/api/comments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
 }
 
-export async function patchComment(id: string, patch: { status?: CommentStatus; text?: string }): Promise<void> {
+export async function patchComment(id: string, patch: { status?: CommentStatus; text?: string; restoreReview?: null }): Promise<void> {
   requireLive();
   await fetch(`/api/comments?id=${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
 }

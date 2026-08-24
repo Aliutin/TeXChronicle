@@ -152,6 +152,7 @@ body.resizing .pdf-scroll, body.resizing .editor-scroll { pointer-events: none; 
 .hl { position: absolute; background: rgba(255, 212, 0, .32); border-bottom: 2px solid rgba(230, 170, 0, .8);
       pointer-events: auto; cursor: pointer; }
 .hl.hl-resolved { background: rgba(126, 231, 135, .22); border-bottom-color: rgba(70, 180, 90, .7); }
+.hl.hl-review { background: rgba(255, 166, 0, .24); border-bottom: 2px dashed rgba(255, 166, 0, .9); }
 /* Reviewer suggestion awaiting the human's accept — a distinct purple dashed mark. */
 .hl.hl-suggested { background: rgba(163, 113, 247, .22); border-bottom: 2px dashed rgba(163, 113, 247, .9); }
 .hl.flash { outline: 2px solid #2d6cdf; }
@@ -414,6 +415,9 @@ button.ghost.tiny { font-size: 11px; padding: 1px 6px; margin-left: auto; }
 .suggested-head button.ghost.tiny:nth-of-type(2) { margin-left: 0; }
 .comment-text { color: #ddd; white-space: pre-wrap; }
 .comment-note { color: #7ee787; font-size: 12px; margin-top: 6px; white-space: pre-wrap; }
+.comment-version { color: #8b949e; font-size: 11px; margin-top: 5px; font-family: ui-monospace, monospace; }
+.comment-restore-warning { color: #ffd580; background: rgba(255, 166, 0, .09); border-left: 2px solid #d29922;
+                           font-size: 12px; line-height: 1.35; margin-top: 7px; padding: 6px 8px; }
 .comment-actions { display: flex; gap: 8px; margin-top: 6px; }
 
 /* ── History ─────────────────────────────────────────────── */

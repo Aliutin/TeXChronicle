@@ -40,6 +40,7 @@ export function CommentsPanel({
 
   const accept = (c: Comment) => void patchComment(c.id, { status: 'accepted' });
   const reject = (c: Comment) => void removeComment(c.id);
+  const short = (sha?: string) => sha?.slice(0, 8);
 
   const card = (c: Comment) => (
     <div key={c.id} className={`comment ${c.id === selectedId ? 'sel' : ''} ${c.status}`} onClick={() => onJump(c)}>
@@ -52,6 +53,18 @@ export function CommentsPanel({
         <div key={i} className="reply"><span className={`role-badge role-${r.by}`}>{r.by}</span>{r.text}</div>
       ))}
       {c.status === 'resolved' && c.resolvedNote && <div className="comment-note">✓ {c.resolvedNote}</div>}
+      {(c.createdCheckpoint || c.resolvedCheckpoint) && (
+        <div className="comment-version">
+          {c.createdCheckpoint && <>created at {short(c.createdCheckpoint)}</>}
+          {c.createdCheckpoint && c.resolvedCheckpoint && <> · </>}
+          {c.resolvedCheckpoint && <>resolved at {short(c.resolvedCheckpoint)}</>}
+        </div>
+      )}
+      {c.restoreReview && (
+        <div className="comment-restore-warning">
+          ⚠ An earlier {c.restoreReview.scope}{c.restoreReview.label ? ` (“${c.restoreReview.label}”)` : ''} was restored after this resolution. Verify that the fix is still present, or reopen it.
+        </div>
+      )}
       {c.status !== 'resolved' && <ReplyBox id={c.id} />}
       <div className="comment-actions" onClick={(e) => e.stopPropagation()}>
         {c.status === 'suggested' && <>
@@ -63,6 +76,7 @@ export function CommentsPanel({
           <button className="ghost" onClick={() => void removeComment(c.id)}>delete</button>
         </>}
         {c.status === 'resolved' && <>
+          {c.restoreReview && <button className="ghost" onClick={() => void patchComment(c.id, { restoreReview: null })}>verified</button>}
           <button className="ghost" onClick={() => void patchComment(c.id, { status: 'accepted' })}>reopen</button>
           <button className="ghost" onClick={() => void removeComment(c.id)}>close</button>
         </>}

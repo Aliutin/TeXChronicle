@@ -24,6 +24,14 @@ export type CommentRole = 'human' | 'reviewer' | 'defender' | 'author';
 
 export interface Reply { by: CommentRole; text: string; at: string }
 
+export type RestoreScope = 'project' | 'section' | 'file';
+export interface RestoreReview {
+  checkpoint: string;
+  scope: RestoreScope;
+  label?: string;
+  at: string;
+}
+
 export interface Comment {
   id: string;
   page: number;
@@ -34,8 +42,13 @@ export interface Comment {
   role?: CommentRole; // who raised it (default human)
   replies?: Reply[];  // a thread of follow-ups (human ↔ agents)
   created: string;
+  createdCheckpoint?: string;
   resolvedNote?: string;
   resolvedAt?: string;
+  resolvedCheckpoint?: string;
+  /** An older version was restored after resolution. The fix may have been
+   * undone; keep the comment resolved but ask the human to verify or reopen. */
+  restoreReview?: RestoreReview;
 }
 
 const FILE = 'comments.json';
@@ -125,7 +138,7 @@ async function save(root: string, comments: Comment[]): Promise<void> {
 
 export async function addComment(
   root: string,
-  input: { page: number; quote: string; rects: CommentRect[]; text: string; role?: CommentRole; status?: CommentStatus },
+  input: { page: number; quote: string; rects: CommentRect[]; text: string; role?: CommentRole; status?: CommentStatus; createdCheckpoint?: string },
 ): Promise<Comment> {
   const comment: Comment = {
     id: randomBytes(6).toString('hex'),
@@ -141,6 +154,7 @@ export async function addComment(
     // on almost every read.
     replies: [],
     created: new Date().toISOString(),
+    ...(input.createdCheckpoint ? { createdCheckpoint: input.createdCheckpoint } : {}),
   };
   // The whole read -> mutate -> write runs as one cross-process critical
   // section, so two agents adding/resolving/replying to comments at the same
@@ -156,7 +170,13 @@ export async function addComment(
 export async function updateComment(
   root: string,
   id: string,
-  patch: { status?: CommentStatus; resolvedNote?: string; text?: string },
+  patch: {
+    status?: CommentStatus;
+    resolvedNote?: string;
+    text?: string;
+    resolvedCheckpoint?: string;
+    restoreReview?: RestoreReview | null;
+  },
 ): Promise<Comment | null> {
   return withLock(root, async () => {
     const all = await listComments(root);
@@ -165,12 +185,52 @@ export async function updateComment(
     if (patch.text !== undefined) c.text = String(patch.text).slice(0, 4000);
     if (patch.status) {
       c.status = patch.status;
-      if (patch.status === 'resolved') c.resolvedAt = new Date().toISOString();
-      else { delete c.resolvedAt; delete c.resolvedNote; }
+      if (patch.status === 'resolved') {
+        c.resolvedAt = new Date().toISOString();
+        if (patch.resolvedCheckpoint) c.resolvedCheckpoint = patch.resolvedCheckpoint;
+        delete c.restoreReview;
+      } else {
+        delete c.resolvedAt;
+        delete c.resolvedNote;
+        delete c.resolvedCheckpoint;
+        delete c.restoreReview;
+      }
     }
     if (patch.resolvedNote !== undefined) c.resolvedNote = String(patch.resolvedNote).slice(0, 2000);
+    if (patch.restoreReview === null) delete c.restoreReview;
+    else if (patch.restoreReview !== undefined && c.status === 'resolved') {
+      c.restoreReview = {
+        checkpoint: String(patch.restoreReview.checkpoint),
+        scope: patch.restoreReview.scope,
+        ...(patch.restoreReview.label ? { label: String(patch.restoreReview.label).slice(0, 300) } : {}),
+        at: patch.restoreReview.at,
+      };
+    }
     await save(root, all);
     return c;
+  });
+}
+
+/** Flag several resolved comments in one atomic write after restoring an older
+ * version. They are not auto-reopened because a partial restore may be unrelated;
+ * the UI offers both "verified" and "reopen". */
+export async function markCommentsForRestoreReview(
+  root: string,
+  ids: string[],
+  review: RestoreReview,
+): Promise<number> {
+  if (!ids.length) return 0;
+  return withLock(root, async () => {
+    const wanted = new Set(ids);
+    const all = await listComments(root);
+    let changed = 0;
+    for (const c of all) {
+      if (c.status !== 'resolved' || !wanted.has(c.id)) continue;
+      c.restoreReview = review;
+      changed++;
+    }
+    if (changed) await save(root, all);
+    return changed;
   });
 }
 

@@ -109,6 +109,21 @@ anchored annotations):
 
 ## Run the editor without an LLM
 
+### One-click launcher (Windows)
+
+After installing/linking MagicTeX, install its desktop and Start-menu shortcut once:
+
+```bash
+magictex install-launcher
+```
+
+After that there is no project command to remember: click **MagicTeX**, choose the
+main `.tex` file, and the browser workspace opens. You can also drag a `.tex` file
+onto the desktop shortcut. The small status window keeps the local workspace alive;
+close it when you are finished. `magictex open` presents the same graphical picker.
+
+### Terminal launch
+
 From a source checkout, install and link MagicTeX once:
 
 ```bash
