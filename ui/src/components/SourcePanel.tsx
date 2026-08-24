@@ -3,7 +3,7 @@
 // side watcher then recompiles and the WS reload refreshes the PDF, giving the
 // Overleaf/Typst type→render loop. Ctrl+S still saves immediately.
 // When a reload event arrives and the editor has no unsaved changes, the open
-// file is re-fetched so external edits (Claude's) don't get clobbered by a
+// file is re-fetched so changes from an external editor don't get clobbered by a
 // later save from a stale buffer.
 // PDF clicks normally arrive with a genuine SyncTeX file+line. Visible prose
 // refines macro-expanded blocks and remains the fallback for the WASM backend.
@@ -199,7 +199,7 @@ export function SourcePanel({
     }
   }, [preferredFile, files, active, openFile]);
 
-  // External edits (Claude, another editor) recompile → reload event. Drop the
+  // External edits (an AI agent or another editor) recompile → reload event. Drop the
   // cache so cross-file search re-reads, and refresh the open buffer when clean.
   useEffect(() => {
     cache.current.clear();

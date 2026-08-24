@@ -203,9 +203,9 @@ export default function App() {
         <div className="banner-dead" role="alert">
           <strong>This window is no longer live.</strong>{' '}
           The MagicTeX server it was connected to has stopped, so everything below is a
-          snapshot from when it did — <em>including any error message</em>. Ask Claude to
-          render a preview again; that opens a new window at a new address. This one can be
-          closed.
+          snapshot from when it did — <em>including any error message</em>. Restart
+          MagicTeX from the terminal; that opens a new live window at a new address.
+          This one can be closed.
         </div>
       )}
       {/* Losing the change record is not a footnote. Someone letting an agent

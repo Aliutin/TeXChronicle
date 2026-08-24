@@ -101,7 +101,7 @@ export function PdfView({
       setNote('Loading PDF…');
       step = `fetching ${pdfUrl}`;
       const res = await fetch(`${pdfUrl}${pdfUrl.includes('?') ? '&' : '?'}t=${Date.now()}`);
-      if (!res.ok) { setNoteIsReport(false); setNote('No PDF yet — ask Claude to render a preview.'); return; }
+      if (!res.ok) { setNoteIsReport(false); setNote('No PDF yet — wait for the initial compile or click Recompile.'); return; }
       const data = new Uint8Array(await res.arrayBuffer());
       step = `parsing PDF (${data.length} bytes)`;
       setNote(`Opening PDF (${Math.max(1, Math.round(data.length / 1024 / 1024))} MB)…`);
@@ -569,7 +569,7 @@ export function PdfView({
             <div className="composer-quote">“{draft.quote.slice(0, 120)}{draft.quote.length > 120 ? '…' : ''}”</div>
             <textarea
               autoFocus
-              placeholder="Comment for Claude… (e.g. tighten this paragraph)"
+              placeholder="Comment or editing instruction… (e.g. tighten this paragraph)"
               value={draftText}
               onChange={(e) => setDraftText(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) void submitDraft(); if (e.key === 'Escape') setDraft(null); }}

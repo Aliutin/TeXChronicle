@@ -100,7 +100,7 @@ let serverGone = false;
 
 export class ServerGoneError extends Error {
   constructor() {
-    super('The MagicTeX server this window was connected to has stopped. Ask Claude to render a preview again — that opens a new window.');
+    super('The MagicTeX server this window was connected to has stopped. Restart MagicTeX from the terminal to open a new live window.');
     this.name = 'ServerGoneError';
   }
 }
