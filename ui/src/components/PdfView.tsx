@@ -97,18 +97,28 @@ export function PdfView({
       const container = pagesRef.current;
       const scroller = scrollRef.current;
       if (!container || !scroller) return;
+      setNoteIsReport(false);
+      setNote('Loading PDF…');
       step = `fetching ${pdfUrl}`;
       const res = await fetch(`${pdfUrl}${pdfUrl.includes('?') ? '&' : '?'}t=${Date.now()}`);
       if (!res.ok) { setNoteIsReport(false); setNote('No PDF yet — ask Claude to render a preview.'); return; }
       const data = new Uint8Array(await res.arrayBuffer());
       step = `parsing PDF (${data.length} bytes)`;
+      setNote(`Opening PDF (${Math.max(1, Math.round(data.length / 1024 / 1024))} MB)…`);
       const doc = await pdfjs.getDocument({ data }).promise;
       if (cancelled) return;
+      setNumPages(doc.numPages);
+      onPages?.(doc.numPages);
       // Preserve scroll position as a ratio so zoom keeps you in place.
       const ratio = scroller.scrollHeight ? scroller.scrollTop / scroller.scrollHeight : 0;
-      // Render every page off-screen, then swap in at once — no blank flash.
+      // Preserve already-visible pages during a recompile or zoom, then swap
+      // the replacement in at once. On the first load there is nothing useful
+      // to preserve, so publish each finished page immediately. Large papers
+      // used to look completely blank until all 80+ pages had rendered.
+      const hadPages = container.childElementCount > 0;
       const next = document.createDocumentFragment();
       for (let i = 1; i <= doc.numPages; i++) {
+        if (hadPages || i === 1) setNote(`Rendering page ${i} of ${doc.numPages}…`);
         step = `page ${i}/${doc.numPages}: getPage`;
         const pg = await doc.getPage(i);
         if (cancelled) return;
@@ -165,12 +175,20 @@ export function PdfView({
         } catch (e) {
           console.warn(`[magictex] column detection skipped — ${step}`, e);
         }
+        if (!hadPages) {
+          // Moving the wrapper out of the fragment makes the page visible;
+          // later pages continue rendering without covering page 1 with a
+          // blocking progress message.
+          container.appendChild(wrap);
+          if (i === 1) {
+            setNote('');
+            setRenderTick((t) => t + 1);
+          }
+        }
       }
       if (cancelled) return;
-      container.replaceChildren(next);
+      if (hadPages) container.replaceChildren(next);
       setNote('');
-      setNumPages(doc.numPages);
-      onPages?.(doc.numPages);
       setRenderTick((t) => t + 1);
       scroller.scrollTop = ratio * scroller.scrollHeight;
     })().catch((e) => {
