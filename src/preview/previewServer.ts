@@ -18,7 +18,7 @@ import { diffViewHtml } from './diffViewPage.js';
 import { canTrackHistory, historyStatus, listCheckpoints, getCheckpointDiff, getWorkingDiff, restoreCheckpoint, restoreFile } from '../git/checkpoints.js';
 import { listSectionHistory, getSectionDiff, restoreSection } from '../git/sectionHistory.js';
 import { readRenderArtifact } from '../git/renderArtifacts.js';
-import { listTextFiles, readTextFile, writeTextFile, listTree, createTextFile, createDir, renameEntry, deleteEntry, writeUpload, resolveAssetFile } from './filesApi.js';
+import { listTextFiles, readTextFile, writeTextFile, listTree, createTextFile, createDir, renameEntry, deleteEntry, writeUpload, resolveAssetFile, resolveIncludeFile } from './filesApi.js';
 import { suppressNextChange } from '../watch/fileWatcher.js';
 import { listComments, addComment, updateComment, deleteComment, addReply } from './commentsStore.js';
 import { getGitHubRemote } from '../git/remote.js';
@@ -328,6 +328,24 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
     if (pathname === '/api/tree') {
       try { return json(res, await listTree(getProjectRoot())); }
       catch (e) { res.writeHead(500, ISOLATION_HEADERS).end(String((e as Error).message)); return; }
+    }
+
+    // Read-only TeX included by the Live document model. Generated tables often
+    // live in a sibling `tables` directory outside the launched draft folder;
+    // resolve them within the enclosing Git work tree without making them
+    // writable through the browser editor.
+    if (pathname === '/api/include') {
+      if (req.method !== 'GET') { res.writeHead(405, ISOLATION_HEADERS).end('method not allowed'); return; }
+      try {
+        const include = await resolveIncludeFile(getProjectRoot(), reqUrl.searchParams.get('path') ?? '');
+        return json(res, {
+          path: include.relativePath,
+          content: await readFile(include.fullPath, 'utf8'),
+          editable: include.editable,
+        });
+      } catch (e) {
+        res.writeHead(404, ISOLATION_HEADERS).end(String((e as Error).message)); return;
+      }
     }
 
     // Read-only project artwork for Live figures and file-tree previews. This

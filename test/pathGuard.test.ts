@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync, readFileSync } from
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { readTextFile, writeTextFile, deleteEntry, renameEntry, createTextFile, resolveAssetFile } from '../src/preview/filesApi.js';
+import { readTextFile, writeTextFile, deleteEntry, renameEntry, createTextFile, resolveAssetFile, resolveIncludeFile } from '../src/preview/filesApi.js';
 
 // Every one of these endpoints takes a path from an HTTP query string and reads
 // or writes the user's disk with it. The lexical guard (resolve + startsWith with
@@ -60,14 +60,22 @@ test('a nested LaTeX draft can preview sibling artwork inside its Git project', 
   const repository = join(base, 'repository');
   const root = join(repository, 'paper', 'draft');
   const figures = join(repository, 'paper', 'figures');
+  const tables = join(repository, 'paper', 'tables');
   mkdirSync(root, { recursive: true });
   mkdirSync(figures, { recursive: true });
+  mkdirSync(tables, { recursive: true });
   execFileSync('git', ['init', '--quiet'], { cwd: repository, windowsHide: true });
   writeFileSync(join(root, 'main.tex'), '\\includegraphics{../figures/map.pdf}\n');
   writeFileSync(join(figures, 'map.pdf'), Buffer.from('%PDF-1.4'));
 
   const sibling = await resolveAssetFile(root, '../figures/map.pdf', 'main.tex');
   assert.equal(sibling.fullPath, join(figures, 'map.pdf'));
+
+  writeFileSync(join(tables, 'summary.tex'), String.raw`\begin{tabular}{lc}Name & Value \\ \end{tabular}`);
+  const included = await resolveIncludeFile(root, '../tables/summary');
+  assert.equal(included.fullPath, join(tables, 'summary.tex'));
+  assert.equal(included.relativePath, '../tables/summary.tex');
+  assert.equal(included.editable, false, 'sibling generated source must stay read-only');
 
   const outside = join(base, 'private.png');
   writeFileSync(outside, 'PRIVATE IMAGE');
@@ -76,6 +84,8 @@ test('a nested LaTeX draft can preview sibling artwork inside its Git project', 
     /outside/,
     `an asset escaped the Git project into ${dirname(outside)}`,
   );
+  writeFileSync(join(base, 'private.tex'), 'PRIVATE SOURCE');
+  await assert.rejects(() => resolveIncludeFile(root, '../../../private.tex'), /outside/);
 });
 
 test('a symlinked FILE cannot be read out of the project', async (t) => {

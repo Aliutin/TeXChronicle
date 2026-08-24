@@ -38,6 +38,7 @@ function rawGet(port: number, path: string, headers: Record<string, string>) {
 async function server() {
   const root = mkdtempSync(join(tmpdir(), 'magictex-origin-'));
   writeFileSync(join(root, 'main.tex'), '\\documentclass{article}\\begin{document}x\\end{document}\n');
+  writeFileSync(join(root, 'generated-table.tex'), String.raw`\begin{tabular}{lc}Name & Value \\ \end{tabular}`);
   writeFileSync(join(root, 'figure.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   setProjectRoot(root);
   const preview = await startPreviewServer();
@@ -128,6 +129,13 @@ test('the workspace itself still works', async () => {
     assert.equal(asset.status, 200, 'a same-origin project image was refused');
     assert.equal(asset.headers.get('content-type'), 'image/png');
     assert.deepEqual([...new Uint8Array(await asset.arrayBuffer())], [0x89, 0x50, 0x4e, 0x47]);
+
+    const include = await fetch(`${base}/api/include?path=generated-table`, { headers: { 'Sec-Fetch-Site': 'same-origin' } });
+    assert.equal(include.status, 200, 'a same-origin read-only TeX include was refused');
+    const included = await include.json() as { path: string; content: string; editable: boolean };
+    assert.equal(included.path, 'generated-table.tex');
+    assert.match(included.content, /tabular/);
+    assert.equal(included.editable, true);
 
     const post = await fetch(`${base}/api/fs`, {
       method: 'POST',

@@ -149,6 +149,7 @@ export async function readTextFile(root: string, rel: string): Promise<string> {
 }
 
 export interface ResolvedAssetFile { fullPath: string; relativePath: string }
+export interface ResolvedIncludeFile { fullPath: string; relativePath: string; editable: boolean }
 
 /** A paper is often launched from `repo/paper/draft`, while its TeX source uses
  * `../figures/map.pdf`. Editing and history must remain scoped to `draft`, but a
@@ -169,6 +170,34 @@ async function assetBoundary(root: string): Promise<string> {
     assetBoundaryCache.set(rootAbs, pending);
   }
   return pending;
+}
+
+/** Resolve a read-only TeX include used to build the Live document model. The
+ * editor's ordinary /api/file route intentionally remains project-local; this
+ * wider route exists only so a nested draft can display generated tables kept
+ * elsewhere in the same Git work tree. */
+export async function resolveIncludeFile(root: string, rel: string): Promise<ResolvedIncludeFile> {
+  let requested = String(rel).trim().replace(/\\/g, '/');
+  if (!requested || posix.isAbsolute(requested) || /^[a-z]:\//i.test(requested)) {
+    throw new Error('path outside project');
+  }
+  if (!posix.extname(requested)) requested += '.tex';
+  if (!/\.tex$/i.test(requested)) throw new Error('unsupported include type');
+
+  const rootAbs = normalize(resolve(root));
+  const boundary = normalize(resolve(await assetBoundary(rootAbs)));
+  const absolute = normalize(resolve(rootAbs, requested));
+  if (absolute !== boundary && !absolute.startsWith(boundary + sep)) {
+    throw new Error('path outside project');
+  }
+
+  const guarded = await guardPath(boundary, toPosix(relative(boundary, absolute)), true);
+  const info = await stat(guarded).catch(() => null);
+  if (!info?.isFile()) throw new Error('include not found');
+  const projectRelative = toPosix(relative(rootAbs, guarded));
+  const [realProject, realInclude] = await Promise.all([realpath(rootAbs), realpath(guarded)]);
+  const editable = realInclude.startsWith(normalize(realProject) + sep);
+  return { fullPath: guarded, relativePath: projectRelative, editable };
 }
 
 /** Resolve an image/PDF for browser display. TeX accepts an omitted graphics

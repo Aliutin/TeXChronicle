@@ -147,7 +147,57 @@ test('include resolution stays within the project and adds the tex extension', (
   assert.equal(resolveLatexInclude('chapters/main.tex', './intro'), 'chapters/intro.tex');
   assert.equal(resolveLatexInclude('chapters/main.tex', '../appendix/a.tex'), 'appendix/a.tex');
   assert.equal(resolveLatexInclude('main.tex', '../../outside'), null);
+  assert.equal(resolveLatexInclude('main.tex', '../tables/generated', true), '../tables/generated.tex');
   assert.equal(resolveLatexInclude('main.tex', 'https://example.com/a.tex'), null);
+});
+
+test('wrapped generated table includes become a simplified read-only table', async () => {
+  const root = String.raw`\begin{document}
+\begin{table}
+\caption{Generated results.}
+\resizebox{\textwidth}{!}{\input{../tables/generated}}
+\end{table}
+\begin{verbatim}
+\iffalse
+\input{../tables/not-a-dependency}
+\end{verbatim}
+Inline \verb|\input{../tables/also-not-a-dependency}|.
+\iffalse
+\begin{table}
+\caption{Inactive table.}
+\input{../tables/inactive}
+\end{table}
+\fi
+\iffalse Hidden branch.\else Active conditional prose.\fi
+\end{document}`;
+  const child = String.raw`\begin{tabular}{lc}
+\toprule
+Term & Estimate \\
+\cmidrule(lr){1-2}
+Effect & $-0.25$ \\
+\bottomrule
+\end{tabular}`;
+  const requested: string[] = [];
+  const expanded = await expandLatexIncludes('main.tex', root, async (path) => {
+    requested.push(path);
+    return path === '../tables/generated.tex'
+      ? { path, content: child, editable: false }
+      : null;
+  }, new AbortController().signal, { allowParent: true });
+
+  assert.deepEqual(requested, ['../tables/generated.tex']);
+  const effectLine = expanded.text.split('\n').findIndex((line) => line.includes('Effect'));
+  assert.deepEqual(expanded.locations[effectLine], { file: '../tables/generated.tex', line: 5, editable: false });
+
+  const document = parseLatexPreview(expanded.text);
+  const tables = document.blocks.filter((block) => block.type === 'table');
+  assert.equal(tables.length, 1, 'an inactive conditional table leaked into Live');
+  const table = tables[0];
+  assert.ok(table && table.type === 'table');
+  assert.equal(table.rows.length, 2);
+  assert.equal(previewPlainText(table.rows[0].cells[0].content), 'Term');
+  assert.equal(previewPlainText(table.rows[1].cells[0].content), 'Effect');
+  assert.match(document.blocks.map((block) => 'content' in block && Array.isArray(block.content) ? previewPlainText(block.content) : '').join(' '), /Active conditional prose/);
 });
 
 test('visual prose edits replace only the changed source slice', () => {

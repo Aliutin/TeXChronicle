@@ -158,15 +158,74 @@ export function maskLatexComments(source: string): string {
   return chars.join('');
 }
 
-export interface PreviewSourceLocation { file: string; line: number }
+function maskLatexLiteralRegions(source: string): string {
+  const blank = (literal: string) => literal.replace(/[^\r\n]/g, ' ');
+  return source
+    .replace(
+      /\\begin\s*\{(verbatim\*?|Verbatim|lstlisting|minted|comment)\}[\s\S]*?\\end\s*\{\1\}/g,
+      blank,
+    )
+    .replace(/\\begin\s*\{(?:verbatim\*?|Verbatim|lstlisting|minted|comment)\}[\s\S]*$/g, blank)
+    .replace(/\\verb\*?([^A-Za-z\s\r\n]).*?\1/g, blank);
+}
+
+/** Hide the inactive branch of explicit `\iffalse` blocks while preserving
+ * every character offset and newline. TeX sources commonly park obsolete
+ * tables this way; Live should neither display nor fetch their missing inputs.
+ * Unknown conditionals remain visible because evaluating arbitrary TeX tests is
+ * the compiler's job, but they are tracked so nested false blocks close safely. */
+export function maskLatexFalseBlocks(source: string): string {
+  const chars = source.split('');
+  const scan = maskLatexLiteralRegions(source);
+  const stack: Array<{ name: string; parentVisible: boolean }> = [];
+  const token = /\\(if[A-Za-z@]*|else|fi)\b/g;
+  let visible = true;
+  let cursor = 0;
+  const mask = (from: number, to: number) => {
+    for (let index = from; index < to; index++) {
+      if (chars[index] !== '\n' && chars[index] !== '\r') chars[index] = ' ';
+    }
+  };
+
+  for (let match = token.exec(scan); match; match = token.exec(scan)) {
+    if (!visible) mask(cursor, match.index);
+    const name = match[1];
+    const end = match.index + match[0].length;
+    if (name.startsWith('if')) {
+      const parentVisible = visible;
+      stack.push({ name, parentVisible });
+      if (name === 'iffalse' || !parentVisible) {
+        mask(match.index, end);
+        visible = false;
+      }
+    } else if (name === 'else') {
+      const frame = stack[stack.length - 1];
+      if (frame?.name === 'iffalse' || frame?.parentVisible === false) {
+        mask(match.index, end);
+        visible = Boolean(frame?.parentVisible && frame.name === 'iffalse');
+      }
+    } else {
+      const frame = stack.pop();
+      if (frame?.name === 'iffalse' || frame?.parentVisible === false || !visible) mask(match.index, end);
+      visible = frame?.parentVisible ?? true;
+    }
+    cursor = end;
+  }
+  if (!visible) mask(cursor, source.length);
+  return chars.join('');
+}
+
+export interface PreviewSourceLocation { file: string; line: number; editable?: boolean }
 export interface ExpandedPreviewSource { text: string; locations: PreviewSourceLocation[] }
+export interface PreviewIncludeFile { path?: string; content: string; editable?: boolean }
+export interface ExpandLatexIncludeOptions { allowParent?: boolean }
 
 export function sourceWithPreviewLocations(file: string, source: string): ExpandedPreviewSource {
   const lines = source.split(/\r?\n/);
   return { text: lines.join('\n'), locations: lines.map((_, index) => ({ file, line: index + 1 })) };
 }
 
-export function resolveLatexInclude(parent: string, requested: string): string | null {
+export function resolveLatexInclude(parent: string, requested: string, allowParent = false): string | null {
   let target = requested.trim().replace(/\\/g, '/');
   if (!target || /^(?:[a-z]+:|\/)/i.test(target)) return null;
   if (!/\.[A-Za-z0-9]+$/.test(target)) target += '.tex';
@@ -176,50 +235,112 @@ export function resolveLatexInclude(parent: string, requested: string): string |
   const clean: string[] = [];
   for (const part of parts) {
     if (!part || part === '.') continue;
-    if (part === '..') { if (!clean.length) return null; clean.pop(); }
+    if (part === '..') {
+      if (clean.length && clean[clean.length - 1] !== '..') clean.pop();
+      else if (allowParent) clean.push('..');
+      else return null;
+    }
     else clean.push(part);
   }
   return clean.join('/');
 }
 
-/** Expand ordinary line-level \input/\include calls while retaining a map back
- * to every original file and line. Preamble inputs (fonts, generated maps) are
- * deliberately left to TeX. The loader keeps this function browser-agnostic. */
+/** Expand body \input/\include calls—including ones wrapped by resizebox—while
+ * retaining a map back to every original file and line. Preamble inputs (fonts,
+ * generated maps) are deliberately left to TeX. */
 export async function expandLatexIncludes(
   file: string,
   source: string,
-  load: (path: string, signal: AbortSignal) => Promise<string | null>,
+  load: (path: string, signal: AbortSignal) => Promise<string | PreviewIncludeFile | null>,
   signal: AbortSignal,
+  options: ExpandLatexIncludeOptions = {},
   visited = new Set<string>([file]),
   depth = 0,
 ): Promise<ExpandedPreviewSource> {
   if (depth >= 8) return sourceWithPreviewLocations(file, source);
   const lines = source.split(/\r?\n/);
+  const scanLines = maskLatexFalseBlocks(maskLatexComments(source)).split(/\r?\n/);
   const output: string[] = [];
   const locations: PreviewSourceLocation[] = [];
-  const hasDocument = /\\begin\s*\{document\}/.test(maskLatexComments(source));
+  const hasDocument = /\\begin\s*\{document\}/.test(scanLines.join('\n'));
   let inDocument = !hasDocument;
+  let literalEnvironment: string | null = null;
 
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
-    const visible = maskLatexComments(line);
+    const visible = scanLines[index] ?? '';
     if (/\\begin\s*\{document\}/.test(visible)) inDocument = true;
-    const include = inDocument ? /^\s*\\(?:input|include)\s*\{([^{}]+)\}\s*$/.exec(visible) : null;
-    const child = include ? resolveLatexInclude(file, include[1]) : null;
-    if (child && !visited.has(child)) {
-      const childSource = await load(child, signal).catch((error) => {
+
+    // Literal environments may contain documentation examples such as
+    // `\input{secret}`. They are prose, not dependencies, and must never cause
+    // a file request merely because Live is open.
+    if (literalEnvironment) {
+      output.push(line);
+      locations.push({ file, line: index + 1 });
+      if (new RegExp(`\\\\end\\s*\\{${literalEnvironment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\}`).test(visible)) {
+        literalEnvironment = null;
+      }
+      continue;
+    }
+    const literalBegin = /\\begin\s*\{(verbatim\*?|Verbatim|lstlisting|minted|comment)\}/.exec(visible);
+    if (literalBegin) {
+      output.push(line);
+      locations.push({ file, line: index + 1 });
+      const tail = visible.slice(literalBegin.index + literalBegin[0].length);
+      if (!new RegExp(`\\\\end\\s*\\{${literalBegin[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\}`).test(tail)) {
+        literalEnvironment = literalBegin[1];
+      }
+      continue;
+    }
+
+    const includeVisible = visible.replace(/\\verb\*?([^A-Za-z\s]).*?\1/g, (literal) => ' '.repeat(literal.length));
+    const includeRe = /\\(?:input|include)\s*\{([^{}]+)\}/g;
+    const includes = inDocument
+      ? [...includeVisible.matchAll(includeRe)].filter((match) => !escapedAt(includeVisible, match.index ?? 0))
+      : [];
+    let cursor = 0;
+    let expandedAny = false;
+    for (const include of includes) {
+      const child = resolveLatexInclude(file, include[1], options.allowParent === true);
+      if (!child || visited.has(child)) continue;
+      const loaded = await load(child, signal).catch((error) => {
         if (signal.aborted) throw error;
         return null;
       });
-      if (childSource !== null) {
-        const expanded = await expandLatexIncludes(child, childSource, load, signal, new Set(visited).add(child), depth + 1);
-        output.push(...expanded.text.split('\n'));
-        locations.push(...expanded.locations);
-        continue;
-      }
+      if (loaded === null) continue;
+      const childSource = typeof loaded === 'string' ? loaded : loaded.content;
+      const childFile = typeof loaded === 'string' ? child : loaded.path ?? child;
+      if (visited.has(childFile)) continue;
+      const expanded = await expandLatexIncludes(
+        childFile,
+        childSource,
+        load,
+        signal,
+        options,
+        new Set(visited).add(childFile),
+        depth + 1,
+      );
+      const childLocations = typeof loaded !== 'string' && loaded.editable === false
+        ? expanded.locations.map((location) => ({ ...location, editable: false }))
+        : expanded.locations;
+
+      // Put wrappers such as `\resizebox{...}{!}{` and their closing brace on
+      // separate preview lines. The TeX meaning is unchanged, while every table
+      // cell keeps an unambiguous line mapping to its generated source file.
+      output.push(line.slice(cursor, include.index));
+      locations.push({ file, line: index + 1 });
+      output.push(...expanded.text.split('\n'));
+      locations.push(...childLocations);
+      cursor = include.index! + include[0].length;
+      expandedAny = true;
     }
-    output.push(line);
-    locations.push({ file, line: index + 1 });
+    if (expandedAny) {
+      output.push(line.slice(cursor));
+      locations.push({ file, line: index + 1 });
+    } else {
+      output.push(line);
+      locations.push({ file, line: index + 1 });
+    }
     if (/\\end\s*\{document\}/.test(visible)) inDocument = false;
   }
   return { text: output.join('\n'), locations };
@@ -522,7 +643,7 @@ export function parseInline(text: string, context: ParseContext): InlineNode[] {
       i = lastUsedEnd(macro, macro.name === 'foreignlanguage' ? 2 : 1);
       continue;
     }
-    if (['mbox', 'makebox', 'parbox', 'raisebox', 'multicolumn', 'multirow'].includes(macro.name) && macro.args.length) {
+    if (['mbox', 'makebox', 'parbox', 'raisebox', 'multicolumn', 'multirow', 'makecell', 'shortstack'].includes(macro.name) && macro.args.length) {
       const contentArg = macro.args[macro.args.length - 1];
       nodes.push(...childrenFor(contentArg, context));
       i = contentArg.end;
@@ -685,9 +806,18 @@ function splitAtTopLevel(text: string, kind: 'row' | 'cell'): Array<{ value: str
   return parts;
 }
 
+function maskTableNoise(text: string): string {
+  // Spaces preserve source offsets, unlike deletion. That matters because a
+  // generated-table cell may still be editable when its file is inside the
+  // selected project, and every visible character must map back exactly.
+  return text.replace(
+    /\\(?:toprule|midrule|bottomrule|hline)\b|\\(?:cline|cmidrule)(?:\s*\([^)]*\))?\s*\{[^{}]*\}|\\addlinespace(?:\s*\[[^\]]*\])?|\\specialrule(?:\s*\{[^{}]*\}){1,3}/g,
+    (noise) => ' '.repeat(noise.length),
+  );
+}
+
 function trimTableNoise(text: string): string {
-  return text
-    .replace(/\\(?:toprule|midrule|bottomrule|hline|cline\s*\{[^{}]*\}|addlinespace(?:\s*\[[^\]]*\])?)/g, ' ')
+  return maskTableNoise(text)
     .replace(/\\(?:centering|raggedright|arraybackslash|small|footnotesize)\b/g, ' ')
     .trim();
 }
@@ -751,7 +881,7 @@ function letterNumber(value: number): string {
 
 /** Parse a complete .tex document or a standalone included section. Never throws. */
 export function parseLatexPreview(source: string): PreviewDocument {
-  const masked = maskLatexComments(source);
+  const masked = maskLatexFalseBlocks(maskLatexComments(source));
   const footnotes: PreviewFootnote[] = [];
   const approximated = new Set<string>();
   const references: Record<string, PreviewReference> = {};
@@ -839,7 +969,7 @@ export function parseLatexPreview(source: string): PreviewDocument {
         if (tabular) {
           let contentStart = tabular.innerStart;
           // Column definitions (and tabularx's width) are layout, not content.
-          const groupsToSkip = tabular.name === 'tabularx' ? 2 : 1;
+          const groupsToSkip = tabular.name === 'tabularx' || tabular.name === 'tabular*' ? 2 : 1;
           for (let skipped = 0; skipped < groupsToSkip; skipped++) {
             while (/\s/.test(raw[contentStart] ?? '')) contentStart++;
             const group = readGroup(raw, contentStart);
@@ -848,8 +978,9 @@ export function parseLatexPreview(source: string): PreviewDocument {
           const tabularRaw = raw.slice(contentStart, tabular.endStart);
           const midrule = tabularRaw.indexOf('\\midrule');
           for (const row of splitAtTopLevel(tabularRaw, 'row')) {
-            if (!trimTableNoise(row.value)) continue;
-            const cells: PreviewTableCell[] = splitAtTopLevel(row.value, 'cell').map((cell) => {
+            const rowValue = maskTableNoise(row.value);
+            if (!trimTableNoise(rowValue)) continue;
+            const cells: PreviewTableCell[] = splitAtTopLevel(rowValue, 'cell').map((cell) => {
               const cellStart = environment.innerStart + contentStart + row.start + cell.start;
               const leading = cell.value.length - cell.value.trimStart().length;
               const macro = readMacro(cell.value, leading);

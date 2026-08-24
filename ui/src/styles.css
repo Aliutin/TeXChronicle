@@ -356,6 +356,8 @@ body.resizing-tree-wide .editor-scroll { pointer-events: none; }
 .live-asset small { color: #89919a; }
 .live-float figcaption { margin-top: 9px; color: #3f454c; font-size: 13px; line-height: 1.45; }
 .live-table-caption { margin: 0 0 9px !important; }
+.live-table-preview-note { margin: -3px 0 7px; color: #7e8791; font: 10px/1.35 ui-sans-serif, system-ui, sans-serif;
+                           letter-spacing: .015em; text-align: right; }
 .live-table-scroll { max-width: 100%; overflow-x: auto; }
 .live-table-scroll table { width: 100%; border-collapse: collapse; font: 12px/1.4 ui-sans-serif, system-ui, sans-serif; }
 .live-table-scroll th, .live-table-scroll td { min-width: 70px; padding: 6px 8px; border-bottom: 1px solid #d7dce2; vertical-align: top; text-align: left; }

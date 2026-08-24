@@ -26,6 +26,8 @@ import {
   type PreviewBlock,
   type PreviewDocument,
   type PreviewReference,
+  type PreviewIncludeFile,
+  type PreviewTextSource,
   type PreviewTextChange,
 } from '../latexPreview';
 import { LiveFigureAsset, type AssetSelection } from './AssetPreview';
@@ -39,6 +41,7 @@ export interface LiveSourceEdit {
 }
 
 interface EditingContextValue {
+  canEdit: (source: PreviewTextSource) => boolean;
   resolve: (change: PreviewTextChange) => LiveSourceEdit | null;
   apply: (edit: LiveSourceEdit) => boolean;
   fail: (message: string) => void;
@@ -72,6 +75,15 @@ function lineIndexAt(starts: number[], offset: number): number {
     else high = middle;
   }
   return low;
+}
+
+function sourceRangeEditable(source: PreviewTextSource, expanded: ExpandedPreviewSource, starts: number[]): boolean {
+  const startIndex = lineIndexAt(starts, source.from);
+  const endIndex = lineIndexAt(starts, source.to);
+  for (let index = startIndex; index <= endIndex; index++) {
+    if (expanded.locations[index]?.editable === false) return false;
+  }
+  return true;
 }
 
 function resolveSourceEdit(
@@ -155,7 +167,7 @@ function EditableText({ node }: { node: Extract<InlineNode, { type: 'text' }> })
   const draft = useRef(node.text);
   const lastCommitted = useRef(node.text);
   const structuralDraft = useRef(false);
-  const editable = Boolean(node.source && editing);
+  const editable = Boolean(node.source && editing && editing.canEdit(node.source));
 
   const commit = useCallback((draftValue: string) => {
     const value = structuralDraft.current ? contentEditableParagraphDraft(draftValue) : draftValue;
@@ -354,13 +366,16 @@ function BlockView({ block, document, sourceFile, refreshKey, onEdit, onOpenAsse
         <figure>
           {block.caption.length > 0 && <figcaption className="live-table-caption"><strong>Table {block.number}.</strong>{' '}<InlineView nodes={block.caption} document={document} /></figcaption>}
           {block.rows.length > 0 ? (
-            <div className="live-table-scroll"><table><tbody>{block.rows.map((row, rowIndex) => (
-              <tr key={rowIndex}>{row.cells.map((cell, cellIndex) => {
-                const Cell = row.header ? 'th' : 'td';
-                return <Cell key={cellIndex} colSpan={cell.colSpan}><InlineView nodes={cell.content} document={document} /></Cell>;
-              })}</tr>
-            ))}</tbody></table></div>
-          ) : <div className="live-asset"><span className="live-asset-type">TABLE</span><small>Complex layout is shown in PDF</small></div>}
+            <>
+              <div className="live-table-preview-note">Simplified table · exact typography and spacing remain in PDF</div>
+              <div className="live-table-scroll"><table><tbody>{block.rows.map((row, rowIndex) => (
+                <tr key={rowIndex}>{row.cells.map((cell, cellIndex) => {
+                  const Cell = row.header ? 'th' : 'td';
+                  return <Cell key={cellIndex} colSpan={cell.colSpan}><InlineView nodes={cell.content} document={document} /></Cell>;
+                })}</tr>
+              ))}</tbody></table></div>
+            </>
+          ) : <div className="live-asset"><span className="live-asset-type">TABLE</span><small>Source could not be simplified · exact table remains in PDF</small></div>}
         </figure>
       </Located>
     );
@@ -390,11 +405,11 @@ export function LivePreview({ source, file, refreshKey = 0, onEdit, onTextEdit, 
     setExpanded(immediate);
     if (!renderable) return;
     const controller = new AbortController();
-    const load = async (path: string, signal: AbortSignal): Promise<string | null> => {
-      const response = await fetch(`/api/file?path=${encodeURIComponent(path)}`, { signal });
-      return response.ok ? response.text() : null;
+    const load = async (path: string, signal: AbortSignal): Promise<PreviewIncludeFile | null> => {
+      const response = await fetch(`/api/include?path=${encodeURIComponent(path)}`, { signal });
+      return response.ok ? response.json() as Promise<PreviewIncludeFile> : null;
     };
-    void expandLatexIncludes(file, source, load, controller.signal).then((next) => {
+    void expandLatexIncludes(file, source, load, controller.signal, { allowParent: true }).then((next) => {
       if (!controller.signal.aborted) setExpanded(next);
     }).catch(() => {});
     return () => controller.abort();
@@ -405,6 +420,7 @@ export function LivePreview({ source, file, refreshKey = 0, onEdit, onTextEdit, 
     ? mapLocations(parseLatexPreview(expanded.text), expanded.locations, file)
     : { blocks: [], footnotes: [], references: {}, approximated: [], wordCount: 0 }, [expanded, file, renderable]);
   const editing = useMemo<EditingContextValue>(() => ({
+    canEdit: (textSource) => sourceRangeEditable(textSource, expanded, starts),
     resolve: (change) => resolveSourceEdit(change, expanded, starts, file),
     apply: (edit) => {
       const applied = onTextEdit(edit);
