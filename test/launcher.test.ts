@@ -1,8 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { resolve } from 'node:path';
-import { pickerPlans, resolveLaunchTarget } from '../src/launcher.js';
+import { promisify } from 'node:util';
+import { pickerPlans, recentProjectsPickerPlan, resolveLaunchTarget } from '../src/launcher.js';
 import { windowsLauncherPlan } from '../src/installLauncher.js';
+
+const run = promisify(execFile);
 
 test('an absolute dropped tex file makes its own directory the project root', () => {
   const file = resolve('launcher-fixtures/papers/study/main.tex');
@@ -39,4 +43,24 @@ test('desktop shortcut launches this exact Node and CLI without PATH lookup', ()
   assert.equal(plan.env.MAGICTEX_CLI, 'C:\\Magic TeX\\bin\\cli.mjs');
   assert.match(plan.args.at(-1) ?? '', /CreateShortcut/);
   assert.match(plan.args.at(-1) ?? '', /open --desktop/);
+});
+
+test('Windows recent-project chooser reads its index through the environment', () => {
+  const recents = resolve('C:/Users/A Person/App Data/MagicTeX/recent-projects.json');
+  const plan = recentProjectsPickerPlan(resolve('C:/Users/A Person/Documents'), recents);
+  assert.equal(plan.env?.MAGICTEX_RECENTS_FILE, recents);
+  assert.doesNotMatch(plan.args.join(' '), /A Person/);
+  assert.match(plan.args.at(-1) ?? '', /Recent projects/);
+  assert.match(plan.args.at(-1) ?? '', /DoubleClick/);
+  assert.match(plan.args.at(-1) ?? '', /Browse/);
+});
+
+test('Windows can construct and close the real Recent Projects window', { skip: process.platform !== 'win32' }, async () => {
+  const plan = recentProjectsPickerPlan(process.cwd(), resolve('missing-recents.json'));
+  const { stdout } = await run(plan.command, plan.args, {
+    env: { ...plan.env, MAGICTEX_PICKER_AUTOCLOSE: '1' },
+    windowsHide: true,
+    timeout: 10_000,
+  });
+  assert.equal(stdout, '');
 });

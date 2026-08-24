@@ -1,6 +1,6 @@
 // One-time Windows convenience install: a desktop + Start-menu shortcut starts
-// `magictex open --desktop`, which presents the native .tex picker. A .tex file
-// can also be dragged onto the shortcut; Explorer appends that path to argv.
+// `magictex open --desktop`, which presents the native Recent projects chooser.
+// A .tex file can also be dragged onto the shortcut; Explorer appends it to argv.
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';

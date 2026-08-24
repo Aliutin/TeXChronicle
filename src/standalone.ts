@@ -12,7 +12,8 @@ import { getPreview, shutdownEngine } from './engine/browserHost.js';
 import { summarizeErrors } from './project/parseLog.js';
 import type { Backend, Engine } from './project/compileProject.js';
 import { startWatching, stopWatching } from './watch/fileWatcher.js';
-import { chooseMainTex, resolveLaunchTarget } from './launcher.js';
+import { chooseLaunchTarget, resolveLaunchTarget } from './launcher.js';
+import { rememberRecentProject } from './recentProjects.js';
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const ENGINES = new Set<Engine>(['xelatex', 'pdflatex', 'lualatex']);
@@ -25,7 +26,7 @@ const HELP = `Open a MagicTeX workspace without an LLM.
 
 Usage:
   magictex preview [main.tex] [options]
-  magictex open                       Choose a .tex file in a native dialog
+  magictex open                       Reopen a recent project or browse for .tex
   magictex install-launcher           Add Desktop + Start-menu shortcuts (Windows)
   magictex-mcp preview [main.tex] [options]
 
@@ -127,15 +128,18 @@ async function main(): Promise<void> {
   }
 
   const projectOption = typeof parsed.values.project === 'string' ? parsed.values.project : undefined;
-  let rawMain: string | undefined = parsed.positionals[0];
+  const rawMain: string | undefined = parsed.positionals[0];
+  let launchTarget;
   if (process.argv[2] === 'open' && !rawMain && !projectOption) {
-    rawMain = await chooseMainTex(process.cwd()) ?? undefined;
-    if (!rawMain) {
+    launchTarget = await chooseLaunchTarget(process.cwd());
+    if (!launchTarget) {
       console.log('[MagicTeX] No file selected.');
       return;
     }
+  } else {
+    launchTarget = resolveLaunchTarget(process.cwd(), projectOption, rawMain);
   }
-  const { projectRoot, mainFile } = resolveLaunchTarget(process.cwd(), projectOption, rawMain);
+  const { projectRoot, mainFile } = launchTarget;
   const projectInfo = await stat(projectRoot).catch(() => null);
   if (!projectInfo?.isDirectory()) throw new Error(`Project directory does not exist: ${projectRoot}`);
 
@@ -167,6 +171,9 @@ async function main(): Promise<void> {
 
   console.log('[MagicTeX] initial compile running — the first PDF and History checkpoint appear together after it succeeds.');
   const result = await requestCompile();
+  await rememberRecentProject(projectRoot, result.mainFile).catch((error) => {
+    console.warn(`[MagicTeX] could not update Recent projects: ${(error as Error).message}`);
+  });
   const errors = result.verdict?.errors.length ?? 0;
   if (result.success && errors === 0) {
     console.log(`[MagicTeX] ✓ ${result.mainFile}: ${result.engine} · ${result.backend}, ${result.ms}ms`);

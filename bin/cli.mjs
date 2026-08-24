@@ -42,7 +42,7 @@ if (isBelowFloor(process.versions.node, range)) {
       const paths = await installDesktopLauncher();
       console.log('[MagicTeX] Installed one-click launchers:');
       for (const path of paths) console.log(`  ${path}`);
-      console.log('[MagicTeX] Click MagicTeX and choose the main .tex file, or drag a .tex file onto the desktop shortcut.');
+      console.log('[MagicTeX] Click MagicTeX to reopen a recent paper or browse for a new .tex file; you can also drag a .tex file onto the desktop shortcut.');
     } catch (error) {
       console.error(`[MagicTeX] ${String(error && error.message || error)}`);
       process.exitCode = 1;
@@ -52,7 +52,7 @@ if (isBelowFloor(process.versions.node, range)) {
 
 Usage:
   magictex preview [main.tex] [options]   Open the standalone editor
-  magictex open [main.tex] [options]      Choose a .tex file when omitted
+  magictex open [main.tex] [options]      Open Recent projects when omitted
   magictex install-launcher               Add one-click shortcuts (Windows)
   magictex-mcp                            Start the MCP server on stdio
 

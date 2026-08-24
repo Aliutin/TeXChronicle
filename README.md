@@ -117,10 +117,12 @@ After installing/linking MagicTeX, install its desktop and Start-menu shortcut o
 magictex install-launcher
 ```
 
-After that there is no project command to remember: click **MagicTeX**, choose the
-main `.tex` file, and the browser workspace opens. You can also drag a `.tex` file
-onto the desktop shortcut. The small status window keeps the local workspace alive;
-close it when you are finished. `magictex open` presents the same graphical picker.
+After that there is no project command to remember: click **MagicTeX** and its
+**Recent projects** window lists papers you opened before, with **Browse…** for a
+new main `.tex` file. Double-click a paper and the browser workspace opens. You can
+also drag a `.tex` file onto the desktop shortcut. The small status window keeps the
+local workspace alive; close it when you are finished. `magictex open` presents the
+same recent-project chooser.
 
 ### Terminal launch
 
