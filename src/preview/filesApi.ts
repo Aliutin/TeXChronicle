@@ -3,7 +3,7 @@
 // reload refreshes the PDF, so "save in the browser editor" reuses the exact
 // same live loop as any other edit (Claude's or an external editor's).
 import { readdir, readFile, writeFile, mkdir, rename, rm, stat, realpath } from 'node:fs/promises';
-import { dirname, join, normalize, relative, resolve, sep } from 'node:path';
+import { dirname, join, normalize, posix, relative, resolve, sep } from 'node:path';
 
 const TEXT_EXT = /\.(tex|bib|cls|sty|bst|cfg|clo|def|ldf|fd|bbx|cbx|lbx|txt|md)$/i;
 // Figures/assets: shown in the tree (not editable) and allowed for upload.
@@ -14,6 +14,7 @@ const SKIP_DIRS = new Set(['.git', 'node_modules', '.latex-preview', '.vscode', 
 const MAX_FILES = 500;
 const MAX_FILE_BYTES = 4 * 1024 * 1024;  // 4 MB per LaTeX source
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 MB per uploaded figure
+const ASSET_EXTENSIONS = ['.pdf', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.eps'];
 
 const toPosix = (p: string) => p.split(sep).join('/');
 
@@ -143,6 +144,58 @@ export async function deleteEntry(root: string, rel: string): Promise<void> {
 
 export async function readTextFile(root: string, rel: string): Promise<string> {
   return readFile(await guard(root, rel), 'utf8');
+}
+
+export interface ResolvedAssetFile { fullPath: string; relativePath: string }
+
+/** Resolve an image/PDF for browser display without ever widening the project
+ * boundary. TeX accepts an omitted graphics extension, and included source
+ * files commonly use `../figures/x.pdf`; the latter is allowed only when it
+ * normalizes back inside the selected project root. */
+export async function resolveAssetFile(root: string, rel: string, from?: string): Promise<ResolvedAssetFile> {
+  const raw = String(rel).trim().replace(/\\/g, '/');
+  if (!raw) throw new Error('invalid path');
+
+  const inside = (value: string): string | null => {
+    if (!value || posix.isAbsolute(value) || /^[a-z]:\//i.test(value)) return null;
+    const candidate = posix.normalize(value).replace(/^\.\//, '');
+    if (!candidate || candidate === '.' || candidate === '..' || candidate.startsWith('../')) return null;
+    return candidate;
+  };
+
+  const bases: string[] = [];
+  const direct = inside(raw);
+  if (direct) bases.push(direct);
+  if (from) {
+    const source = inside(String(from).replace(/\\/g, '/'));
+    if (source) {
+      const besideSource = inside(posix.join(posix.dirname(source), raw));
+      if (besideSource && !bases.includes(besideSource)) bases.push(besideSource);
+    }
+  }
+  if (!bases.length) throw new Error('path outside project');
+
+  const candidates: string[] = [];
+  for (const base of bases) {
+    const extension = posix.extname(base);
+    if (extension) {
+      if (!FIGURE_EXT.test(base)) throw new Error('unsupported asset type');
+      candidates.push(base);
+    } else {
+      for (const ext of ASSET_EXTENSIONS) candidates.push(base + ext);
+    }
+  }
+
+  for (const candidate of candidates) {
+    const fullPath = await guardPath(root, candidate);
+    try {
+      const info = await stat(fullPath);
+      if (info.isFile()) return { fullPath, relativePath: candidate };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  throw new Error('asset not found');
 }
 
 export async function writeTextFile(root: string, rel: string, content: string): Promise<void> {

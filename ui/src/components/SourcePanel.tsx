@@ -16,6 +16,7 @@ import { latex } from 'codemirror-lang-latex';
 import { findSourceLine, phrase, stripLatex } from '../sync';
 import { FileTree } from './FileTree';
 import { LivePreview, type LiveSourceEdit } from './LivePreview';
+import { AssetPreview, type AssetSelection } from './AssetPreview';
 import { saveFile, type Status } from '../api';
 
 const LIVE_DEBOUNCE_MS = 1200; // Live mode: recompile this long after you stop typing
@@ -65,6 +66,7 @@ export function SourcePanel({
 }) {
   const [files, setFiles] = useState<string[]>([]);
   const [active, setActive] = useState<string | null>(null);
+  const [activeAsset, setActiveAsset] = useState<AssetSelection | null>(null);
   const [content, setContent] = useState('');
   const [dirty, setDirty] = useState(false);
   const [live, setLive] = useState(() => localStorage.getItem('ws-live') === '1'); // recompile-as-you-type, default off
@@ -127,6 +129,7 @@ export function SourcePanel({
 
   const openFile = useCallback(async (path: string) => {
     const request = ++openRequest.current;
+    setActiveAsset(null);
     // Park the outgoing file's unsaved text before anything overwrites the
     // buffer. Without this, switching files silently threw the edits away: the
     // cache only ever held the last text FETCHED or SAVED, never the dirty
@@ -169,6 +172,21 @@ export function SourcePanel({
     } catch (e) {
       if (request === openRequest.current) setLoadError(`Couldn't load ${path}: ${String(e)}`);
     }
+  }, []);
+
+  const openAsset = useCallback((selection: AssetSelection) => {
+    // An asset replaces only the visible editor surface. Keep the source buffer
+    // parked exactly as a source-to-source switch does, so checking a figure can
+    // never discard the paragraph that was being edited.
+    ++openRequest.current; // invalidate an older source fetch still in flight
+    initialChoice.current = null; // this is a user choice; don't auto-jump later
+    const leaving = activeRef.current;
+    if (leaving && dirtyRef.current) {
+      parked.current.set(leaving, contentRef.current);
+      setDirtyPaths((paths) => new Set(paths).add(leaving));
+    }
+    setActiveAsset(selection);
+    setLoadError(null);
   }, []);
 
   useEffect(() => {
@@ -502,8 +520,9 @@ export function SourcePanel({
     <div className={`source ${wide ? 'source-wide' : ''}`}>
       <div className="source-tree-pane" style={wide ? { width: treeWidth } : undefined}>
         <FileTree
-          active={active}
+          active={activeAsset?.path ?? active}
           onOpen={openFile}
+          onOpenAsset={(path) => openAsset({ path })}
           refreshKey={reloadTick}
           height={wide ? undefined : treeHeight}
           dirtyPaths={allDirty}
@@ -536,7 +555,13 @@ export function SourcePanel({
       />
       <div className="source-editor-pane">
         {loadError && <div className="panel-hint load-error">{loadError}</div>}
-        {active ? (
+        {activeAsset ? (
+          <AssetPreview
+            selection={activeAsset}
+            refreshKey={reloadTick}
+            onClose={() => setActiveAsset(null)}
+          />
+        ) : active ? (
           <>
             {visual && (
               <div className="live-source-pane">
@@ -554,6 +579,7 @@ export function SourcePanel({
                   refreshKey={reloadTick}
                   onEdit={editFromPreview}
                   onTextEdit={applyLiveTextEdit}
+                  onOpenAsset={openAsset}
                 />
               </div>
             )}

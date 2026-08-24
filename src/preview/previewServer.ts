@@ -18,7 +18,7 @@ import { diffViewHtml } from './diffViewPage.js';
 import { canTrackHistory, historyStatus, listCheckpoints, getCheckpointDiff, getWorkingDiff, restoreCheckpoint, restoreFile } from '../git/checkpoints.js';
 import { listSectionHistory, getSectionDiff, restoreSection } from '../git/sectionHistory.js';
 import { readRenderArtifact } from '../git/renderArtifacts.js';
-import { listTextFiles, readTextFile, writeTextFile, listTree, createTextFile, createDir, renameEntry, deleteEntry, writeUpload } from './filesApi.js';
+import { listTextFiles, readTextFile, writeTextFile, listTree, createTextFile, createDir, renameEntry, deleteEntry, writeUpload, resolveAssetFile } from './filesApi.js';
 import { suppressNextChange } from '../watch/fileWatcher.js';
 import { listComments, addComment, updateComment, deleteComment, addReply } from './commentsStore.js';
 import { getGitHubRemote } from '../git/remote.js';
@@ -61,7 +61,8 @@ const MIME: Record<string, string> = {
   '.json': 'application/json', '.txt': 'text/plain', '.pdf': 'application/pdf',
   '.map': 'application/json', '.css': 'text/css',
   '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf',
-  '.svg': 'image/svg+xml', '.png': 'image/png',
+  '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.eps': 'application/postscript',
 };
 
 const ISOLATION_HEADERS = {
@@ -327,6 +328,36 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
     if (pathname === '/api/tree') {
       try { return json(res, await listTree(getProjectRoot())); }
       catch (e) { res.writeHead(500, ISOLATION_HEADERS).end(String((e as Error).message)); return; }
+    }
+
+    // Read-only project artwork for Live figures and file-tree previews. This
+    // deliberately has its own guarded route rather than reusing /api/file,
+    // whose text-only contract is what prevents the editor from decoding an
+    // arbitrary binary file as UTF-8. SVG is sandboxed when navigated directly;
+    // in the UI it is loaded as an image, where scripts do not execute.
+    if (pathname === '/api/asset') {
+      if (req.method !== 'GET') { res.writeHead(405, ISOLATION_HEADERS).end('method not allowed'); return; }
+      try {
+        const asset = await resolveAssetFile(
+          getProjectRoot(),
+          reqUrl.searchParams.get('path') ?? '',
+          reqUrl.searchParams.get('from') ?? undefined,
+        );
+        const body = await readFile(asset.fullPath);
+        const extension = extname(asset.fullPath).toLowerCase();
+        res.writeHead(200, {
+          'Content-Type': MIME[extension] || 'application/octet-stream',
+          'Content-Length': String(body.length),
+          'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(basename(asset.relativePath))}`,
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff',
+          'Content-Security-Policy': 'sandbox',
+          ...ISOLATION_HEADERS,
+        });
+        res.end(body); return;
+      } catch (e) {
+        res.writeHead(404, ISOLATION_HEADERS).end(String((e as Error).message)); return;
+      }
     }
 
     // Upload a figure/asset: raw binary body, target path in ?path=.

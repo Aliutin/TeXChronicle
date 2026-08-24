@@ -28,6 +28,7 @@ import {
   type PreviewReference,
   type PreviewTextChange,
 } from '../latexPreview';
+import { LiveFigureAsset, type AssetSelection } from './AssetPreview';
 
 export interface LiveSourceEdit {
   file: string;
@@ -281,7 +282,14 @@ function Located({ block, sourceFile, onEdit, children, className = '' }: { bloc
   return <div className={`live-block ${className}`} data-source-file={file} data-source-line={block.line}><LineButton file={file} line={block.line} onEdit={onEdit} />{children}</div>;
 }
 
-function BlockView({ block, document, sourceFile, onEdit }: { block: PreviewBlock; document: PreviewDocument; sourceFile: string; onEdit: (line?: number, file?: string) => void }) {
+function BlockView({ block, document, sourceFile, refreshKey, onEdit, onOpenAsset }: {
+  block: PreviewBlock;
+  document: PreviewDocument;
+  sourceFile: string;
+  refreshKey: number;
+  onEdit: (line?: number, file?: string) => void;
+  onOpenAsset: (selection: AssetSelection) => void;
+}) {
   if (block.type === 'title') {
     return (
       <Located block={block} sourceFile={sourceFile} onEdit={onEdit} className="live-title-block">
@@ -326,11 +334,14 @@ function BlockView({ block, document, sourceFile, onEdit }: { block: PreviewBloc
       <Located block={block} sourceFile={sourceFile} onEdit={onEdit} className="live-float">
         <figure>
           <div className="live-figure-assets">
-            {block.assets.length ? block.assets.map((asset) => {
-              const extension = asset.split('.').pop()?.toUpperCase() || 'FIG';
-              const name = asset.split(/[\\/]/).pop() || asset;
-              return <div className="live-asset" key={asset}><span className="live-asset-type">{extension}</span><span>{name}</span><small>Exact artwork in PDF</small></div>;
-            }) : <div className="live-asset"><span className="live-asset-type">FIG</span><small>Exact artwork in PDF</small></div>}
+            {block.assets.length ? block.assets.map((asset) => (
+              <LiveFigureAsset
+                key={asset}
+                selection={{ path: asset, from: block.file ?? sourceFile }}
+                refreshKey={refreshKey}
+                onOpen={onOpenAsset}
+              />
+            )) : <div className="live-asset"><span className="live-asset-type">FIG</span><small>No includegraphics asset found</small></div>}
           </div>
           <figcaption><strong>Figure {block.number}.</strong>{' '}<InlineView nodes={block.caption} document={document} /></figcaption>
         </figure>
@@ -363,12 +374,13 @@ function BlockView({ block, document, sourceFile, onEdit }: { block: PreviewBloc
   return <Located block={block} sourceFile={sourceFile} onEdit={onEdit}><div className="live-notice"><strong>{block.label}</strong>{block.detail && <span>{block.detail}</span>}</div></Located>;
 }
 
-export function LivePreview({ source, file, refreshKey = 0, onEdit, onTextEdit }: {
+export function LivePreview({ source, file, refreshKey = 0, onEdit, onTextEdit, onOpenAsset }: {
   source: string;
   file: string;
   refreshKey?: number;
   onEdit: (line?: number, file?: string) => void;
   onTextEdit: (edit: LiveSourceEdit) => boolean;
+  onOpenAsset: (selection: AssetSelection) => void;
 }) {
   const renderable = /\.tex$/i.test(file);
   const [expanded, setExpanded] = useState(() => sourceWithPreviewLocations(file, source));
@@ -423,7 +435,7 @@ export function LivePreview({ source, file, refreshKey = 0, onEdit, onTextEdit }
             {!renderable ? (
               <div className="live-empty"><h2>Live editing is for .tex files</h2><p>Use Edit Code for bibliography, style, configuration, Markdown, and text files.</p></div>
             ) : document.blocks.length > 0
-              ? document.blocks.map((block, index) => <BlockView key={`${block.type}-${block.file ?? file}-${block.line}-${index}`} block={block} document={document} sourceFile={file} onEdit={onEdit} />)
+              ? document.blocks.map((block, index) => <BlockView key={`${block.type}-${block.file ?? file}-${block.line}-${index}`} block={block} document={document} sourceFile={file} refreshKey={refreshKey} onEdit={onEdit} onOpenAsset={onOpenAsset} />)
               : <div className="live-empty"><h2>Nothing renderable yet</h2><p>Start writing in Code; this page updates from the current source without compiling.</p></div>}
             {document.footnotes.length > 0 && (
               <section className="live-footnotes">

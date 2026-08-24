@@ -200,7 +200,8 @@ body.resizing-tree-wide .editor-scroll { pointer-events: none; }
             color: #bbb; white-space: nowrap; }
 .tree-row:hover { background: #2e3136; }
 .tree-row.on { background: #24344f; color: #fff; }
-.tree-row.asset { color: #8a929c; cursor: default; }
+.tree-row.asset { color: #9ca7b3; cursor: pointer; }
+.tree-row.asset:hover { color: #fff; }
 .tree-caret { width: 12px; text-align: center; color: #888; flex: 0 0 auto; }
 .tree-icon { flex: 0 0 auto; font-size: 12px; }
 .tree-name { overflow: hidden; text-overflow: ellipsis; }
@@ -236,6 +237,21 @@ body.resizing-tree-wide .editor-scroll { pointer-events: none; }
 .editor-scroll .cm-scroller { overflow: auto; }
 .source-code-pane, .live-source-pane { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .source-code-pane.view-hidden { display: none; }
+
+/* Project image/PDF selected from the file tree. This occupies the same large
+   pane as Code/Live, so checking a figure never hides the tree or opens a tab. */
+.asset-preview { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #202226; }
+.asset-preview-bar { background: #26282c; }
+.asset-kind { flex: 0 0 auto; padding: 2px 7px; border: 1px solid #4d617c; border-radius: 4px;
+              color: #bcd4f5; background: #2b3a4e; font-size: 10px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+.asset-preview > .pdf-wrap { flex: 1 1 auto; min-height: 0; }
+.asset-image-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; display: grid; place-items: center;
+                      padding: 30px; background: repeating-conic-gradient(#282b30 0 25%, #23262a 0 50%) 50% / 24px 24px; }
+.asset-image-scroll img { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto;
+                          object-fit: contain; background: #fff; box-shadow: 0 4px 24px rgba(0, 0, 0, .38); }
+.asset-preview-error { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center;
+                       gap: 9px; padding: 30px; color: #9ba5b0; text-align: center; }
+.asset-preview-error strong { color: #d9dee4; }
 
 /* Code/Visual segmented toggle */
 .seg { display: inline-flex; border: 1px solid #55585e; border-radius: 5px; overflow: hidden; }
@@ -325,6 +341,16 @@ body.resizing-tree-wide .editor-scroll { pointer-events: none; }
 .live-asset { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
               min-height: 112px; padding: 14px; border: 1px dashed #aeb7c2; border-radius: 5px;
               color: #4f5863; background: #f5f7f9; text-align: center; font: 12px/1.3 ui-sans-serif, system-ui, sans-serif; }
+.live-asset-preview { width: 100%; overflow: hidden; padding: 8px; border-style: solid; cursor: zoom-in; }
+.live-asset-preview:hover { border-color: #6b91c7; background: #eef5ff; box-shadow: 0 2px 9px rgba(42, 83, 136, .18); }
+.live-asset-visual { display: grid; width: 100%; min-height: 70px; place-items: center; overflow: hidden; border-radius: 3px; background: #fff; }
+.live-asset-visual > img, .live-asset-visual canvas { display: block; max-width: 100%; height: auto; }
+.live-asset-name { max-width: 100%; overflow: hidden; color: #39434e; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.live-asset-fallback, .asset-pdf-thumb { display: flex; min-height: 84px; width: 100%; align-items: center; justify-content: center;
+                                        flex-direction: column; gap: 7px; color: #747e89; background: #f2f4f7; }
+.asset-pdf-thumb canvas { display: none; }
+.asset-pdf-thumb.asset-ready canvas { display: block; }
+.asset-pdf-thumb.asset-ready > span { display: none; }
 .live-asset-type { padding: 3px 7px; border-radius: 3px; background: #dfe7f2; color: #46617f;
                    font-size: 10px; font-weight: 800; letter-spacing: .08em; }
 .live-asset small { color: #89919a; }

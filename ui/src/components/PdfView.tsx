@@ -4,48 +4,10 @@
 // A control strip provides Overleaf-style zoom + page navigation; the render
 // scale is state, and highlights are stored at scale 1 and projected by it.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import '../mathSumPrecise'; // must precede pdfjs — see the file for why
-import * as pdfjs from 'pdfjs-dist';
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import { pdfjs } from '../pdfRuntime';
 import { createComment, inverseSyncTeX, type Comment, type SyncTeXSourceLocation } from '../api';
 import { normalize, phrase } from '../sync';
 import { groupLines, columnsFromTextItems } from '../lines';
-
-// Our own worker module: it installs the Math.sumPrecise polyfill into the
-// worker's global before loading pdf.js's worker. Patching the main thread
-// alone leaves the font/layout half of pdf.js still calling a method Safari
-// does not have, which blanked the PDF pane.
-//
-// But `workerPort` is not a drop-in for `workerSrc`. Inside pdf.js, the
-// workerSrc path (#initialize) wraps worker creation in try/catch, registers an
-// 'error' listener, and falls back to #setupFakeWorker() — running the parser on
-// the main thread — if anything goes wrong. The workerPort path
-// (#initializeFromPort) does none of that: it attaches a message handler and
-// resolves. So a worker that fails to start left `getDocument().promise`
-// permanently unsettled: no pages, no error, and the render pane stuck on
-// "waiting for first compile…" forever. Strictly worse than the bare message the
-// diagnostics work set out to improve.
-//
-// So the fallback is rebuilt here. Construction is wrapped, and an 'error' from
-// the worker hands pdf.js back its own workerSrc path, which brings its fake
-// worker with it — and the main thread already has the polyfill installed by the
-// import above, so the fallback is not the broken configuration either.
-try {
-  const worker = new Worker(new URL('../pdfWorker.ts', import.meta.url), { type: 'module' });
-  worker.addEventListener('error', (e) => {
-    console.error('[MagicTeX] the pdf.js worker failed to start; falling back to pdf.js\'s own worker', e);
-    pdfjs.GlobalWorkerOptions.workerPort = null;
-    pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-  });
-  pdfjs.GlobalWorkerOptions.workerPort = worker;
-} catch (e) {
-  // A CSP that blocks worker-src, or any environment without `Worker`. Throwing
-  // here would take the whole app down, because this runs at module scope on an
-  // import App.tsx makes unconditionally — a blank workspace instead of a blank
-  // PDF pane.
-  console.error('[MagicTeX] could not construct the pdf.js worker; using pdf.js\'s own', e);
-  pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-}
 
 const MIN_SCALE = 0.4;
 const MAX_SCALE = 3;
@@ -55,7 +17,7 @@ interface SyncTarget { text: string; nonce: number }
 
 export function PdfView({
   reloadTick, pdfUrl = '/latest.pdf', historicalLabel, onReturnLatest,
-  comments, onPages, onSelectComment, onSyncToSource, syncTarget,
+  comments, onPages, onSelectComment, onSyncToSource, syncTarget, missingMessage,
 }: {
   reloadTick: number;
   pdfUrl?: string;
@@ -66,6 +28,7 @@ export function PdfView({
   onSelectComment?: (id: string) => void;
   onSyncToSource?: (target: { text: string } & Partial<SyncTeXSourceLocation>) => void;
   syncTarget?: SyncTarget | null;
+  missingMessage?: string;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pagesRef = useRef<HTMLDivElement>(null);
@@ -87,6 +50,7 @@ export function PdfView({
   // ── Render PDF pages (canvas + text layer) ──────────────────────────────
   useEffect(() => {
     let cancelled = false;
+    let loadingTask: ReturnType<typeof pdfjs.getDocument> | undefined;
     // What the render was doing when it threw. A rendering failure reported as
     // bare `String(e)` cost three rounds of guessing on a real bug: the message
     // "TypeError: undefined is not a function (near '...e of t...')" named no
@@ -101,11 +65,17 @@ export function PdfView({
       setNote('Loading PDF…');
       step = `fetching ${pdfUrl}`;
       const res = await fetch(`${pdfUrl}${pdfUrl.includes('?') ? '&' : '?'}t=${Date.now()}`);
-      if (!res.ok) { setNoteIsReport(false); setNote('No PDF yet — wait for the initial compile or click Recompile.'); return; }
+      if (!res.ok) {
+        setNoteIsReport(false);
+        setNote(missingMessage ?? 'No PDF yet — wait for the initial compile or click Recompile.');
+        return;
+      }
       const data = new Uint8Array(await res.arrayBuffer());
+      if (cancelled) return;
       step = `parsing PDF (${data.length} bytes)`;
       setNote(`Opening PDF (${Math.max(1, Math.round(data.length / 1024 / 1024))} MB)…`);
-      const doc = await pdfjs.getDocument({ data }).promise;
+      loadingTask = pdfjs.getDocument({ data });
+      const doc = await loadingTask.promise;
       if (cancelled) return;
       setNumPages(doc.numPages);
       onPages?.(doc.numPages);
@@ -218,8 +188,14 @@ export function PdfView({
         `\n\npdf.js ${pdfjs.version} · ${navigator.userAgent}`,
       );
     });
-    return () => { cancelled = true; };
-  }, [reloadTick, scale, onPages, pdfUrl]);
+    return () => {
+      cancelled = true;
+      // With workerSrc each loading task owns its worker. Release it when a PDF
+      // asset is closed or zoom starts a replacement render; otherwise checking
+      // several figures leaves one worker and document transport alive per file.
+      void loadingTask?.destroy().catch(() => {});
+    };
+  }, [reloadTick, scale, onPages, pdfUrl, missingMessage]);
 
   // ── Track which page is in view (for the page indicator) ────────────────
   useEffect(() => {

@@ -38,6 +38,7 @@ function rawGet(port: number, path: string, headers: Record<string, string>) {
 async function server() {
   const root = mkdtempSync(join(tmpdir(), 'magictex-origin-'));
   writeFileSync(join(root, 'main.tex'), '\\documentclass{article}\\begin{document}x\\end{document}\n');
+  writeFileSync(join(root, 'figure.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   setProjectRoot(root);
   const preview = await startPreviewServer();
   return { root, preview, base: `http://127.0.0.1:${preview.port}` };
@@ -122,6 +123,11 @@ test('the workspace itself still works', async () => {
     const origin = `http://127.0.0.1:${preview.port}`;
     const get = await fetch(`${base}/api/files`, { headers: { 'Sec-Fetch-Site': 'same-origin' } });
     assert.equal(get.status, 200, 'a same-origin GET was refused');
+
+    const asset = await fetch(`${base}/api/asset?path=figure.png`, { headers: { 'Sec-Fetch-Site': 'same-origin' } });
+    assert.equal(asset.status, 200, 'a same-origin project image was refused');
+    assert.equal(asset.headers.get('content-type'), 'image/png');
+    assert.deepEqual([...new Uint8Array(await asset.arrayBuffer())], [0x89, 0x50, 0x4e, 0x47]);
 
     const post = await fetch(`${base}/api/fs`, {
       method: 'POST',

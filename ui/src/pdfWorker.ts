@@ -6,4 +6,4 @@
 // pdf.js's worker directly, we point it at this module, which polyfills and then
 // loads the real thing.
 import './mathSumPrecise';
-import 'pdfjs-dist/build/pdf.worker.min.mjs';
+export * from 'pdfjs-dist/build/pdf.worker.min.mjs';

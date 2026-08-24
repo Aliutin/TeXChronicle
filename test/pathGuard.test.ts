@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readTextFile, writeTextFile, deleteEntry, renameEntry, createTextFile } from '../src/preview/filesApi.js';
+import { readTextFile, writeTextFile, deleteEntry, renameEntry, createTextFile, resolveAssetFile } from '../src/preview/filesApi.js';
 
 // Every one of these endpoints takes a path from an HTTP query string and reads
 // or writes the user's disk with it. The lexical guard (resolve + startsWith with
@@ -36,6 +36,24 @@ test('lexical traversal is still rejected', async () => {
   }
 });
 
+test('project artwork resolves with omitted extensions and included-file paths', async () => {
+  const { root } = project();
+  mkdirSync(join(root, 'figures'));
+  mkdirSync(join(root, 'sections'));
+  writeFileSync(join(root, 'figures', 'result.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+  const direct = await resolveAssetFile(root, 'figures/result');
+  assert.equal(direct.relativePath, 'figures/result.png');
+
+  const fromInclude = await resolveAssetFile(root, '../figures/result.png', 'sections/results.tex');
+  assert.equal(fromInclude.relativePath, 'figures/result.png');
+});
+
+test('project artwork cannot escape through traversal', async () => {
+  const { root } = project();
+  await assert.rejects(() => resolveAssetFile(root, '../secrets/id_rsa.png'), /outside/);
+});
+
 test('a symlinked FILE cannot be read out of the project', async (t) => {
   const { root, outside } = project();
   if (!trySymlink(join(outside, 'id_rsa'), join(root, 'notes.tex'), 'file')) {
@@ -47,6 +65,15 @@ test('a symlinked FILE cannot be read out of the project', async (t) => {
     /symlink/,
     'readTextFile followed a symlink out of the project',
   );
+});
+
+test('a symlinked figure cannot be previewed from outside the project', async (t) => {
+  const { root, outside } = project();
+  writeFileSync(join(outside, 'private.png'), 'NOT REALLY AN IMAGE');
+  if (!trySymlink(join(outside, 'private.png'), join(root, 'figure.png'), 'file')) {
+    return t.skip('symlinks unavailable (Windows without Developer Mode)');
+  }
+  await assert.rejects(() => resolveAssetFile(root, 'figure.png'), /symlink/);
 });
 
 test('a symlinked FILE cannot be written through', async (t) => {

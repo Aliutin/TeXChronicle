@@ -249,6 +249,14 @@ export async function fetchTree(): Promise<TreeNode[]> {
   const r = await fetch('/api/tree');
   return r.ok ? r.json() : [];
 }
+/** Browser-safe URL for an image/PDF inside the selected project. `from` lets
+ *  the server resolve paths used by an included .tex file without weakening the
+ *  project-root boundary. */
+export function projectAssetUrl(path: string, refreshKey = 0, from?: string): string {
+  const query = new URLSearchParams({ path, v: String(refreshKey) });
+  if (from) query.set('from', from);
+  return `/api/asset?${query.toString()}`;
+}
 /** Upload a figure/asset to `path` (relative to the project root). */
 export async function uploadFile(path: string, file: File): Promise<string | null> {
   if (serverGone) return new ServerGoneError().message;

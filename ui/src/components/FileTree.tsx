@@ -1,13 +1,15 @@
 // Overleaf-style file tree: nested folders + editable files, with new file /
-// new folder / rename / delete. Click a file to open it in the editor.
+// new folder / rename / delete. Text opens in the editor; images and PDFs open
+// in the adjacent visual asset viewer.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchTree, fsOp, uploadFile, type TreeNode } from '../api';
 
 export function FileTree({
-  active, onOpen, refreshKey, height, dirtyPaths,
+  active, onOpen, onOpenAsset, refreshKey, height, dirtyPaths,
 }: {
   active: string | null;
   onOpen: (path: string) => void;
+  onOpenAsset: (path: string) => void;
   /** Files holding unsaved edits — including ones not currently open. Without a
    *  marker, parking a buffer on a file switch is just a quieter way to lose it:
    *  the user has no way to know the text is still there, waiting. */
@@ -92,16 +94,19 @@ export function FileTree({
 
   const Row = ({ node, depth }: { node: TreeNode; depth: number }) => {
     const isOpen = open[node.path] ?? false;
+    const assetIcon = /\.pdf$/i.test(node.path) ? '▣' : /\.eps$/i.test(node.path) ? '◈' : '🖼';
     return (
       <>
         <div
           className={`tree-row ${node.type} ${node.editable === false ? 'asset' : ''} ${node.path === active ? 'on' : ''}`}
           style={{ paddingLeft: 8 + depth * 14 }}
-          onClick={() => node.type === 'dir' ? setOpen((o) => ({ ...o, [node.path]: !isOpen })) : node.editable !== false && onOpen(node.path)}
-          title={node.editable === false ? `${node.path} (figure — not editable here)` : node.path}
+          onClick={() => node.type === 'dir'
+            ? setOpen((o) => ({ ...o, [node.path]: !isOpen }))
+            : node.editable === false ? onOpenAsset(node.path) : onOpen(node.path)}
+          title={node.editable === false ? `${node.path} (click to preview)` : node.path}
         >
           <span className="tree-caret">{node.type === 'dir' ? (isOpen ? '▾' : '▸') : ''}</span>
-          <span className="tree-icon">{node.type === 'dir' ? '📁' : node.editable === false ? '🖼' : '📄'}</span>
+          <span className="tree-icon">{node.type === 'dir' ? '📁' : node.editable === false ? assetIcon : '📄'}</span>
           <span className="tree-name">{node.name}</span>
           {dirtyPaths?.has(node.path) && (
             <span className="tree-dirty" title="unsaved changes — still here, not yet on disk">•</span>
