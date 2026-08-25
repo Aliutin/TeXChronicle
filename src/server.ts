@@ -3,7 +3,7 @@
 // Everything heavy (headless browser, WASM engine, preview server, file watcher)
 // is lazily started on the first render_preview call, so merely connecting is cheap.
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -95,8 +95,13 @@ async function checkedProjectRoot(): Promise<string | ToolError> {
 }
 
 
-server.registerTool(RENDER_PREVIEW_NAME, renderPreviewConfig, async ({ mainFile, engine, backend, shellEscape }) => {
-  const projectRoot = getProjectRoot();
+server.registerTool(RENDER_PREVIEW_NAME, renderPreviewConfig, async ({ projectRoot: requestedRoot, mainFile, engine, backend, shellEscape }) => {
+  // The third way to point at the paper, and the only one an agent can apply on
+  // its own: --project and $TEXCHRONICLE_PROJECT both need the human to edit the
+  // client's config and restart it. A relative path is read against the root
+  // already in force, so "../paper" means what it looks like it means.
+  const requested = requestedRoot ? resolve(getProjectRoot(), requestedRoot) : undefined;
+  const projectRoot = requested ?? getProjectRoot();
   try {
     // Before anything that writes. startWatching() pins a recursive watcher to
     // this root for the rest of the process (polling, on Windows), and the
@@ -104,6 +109,10 @@ server.registerTool(RENDER_PREVIEW_NAME, renderPreviewConfig, async ({ mainFile,
     // inside it — both of which used to happen in whatever directory the client
     // spawned us in, several steps before resolveMainFile said "no .tex files".
     await assertLooksLikeProject(projectRoot, mainFile);
+    // Only once it is known to be a paper. Storing it first would let one
+    // mistyped path leave every later tool call — the comment tools among them,
+    // and they create the history store — aimed at a folder we just refused.
+    if (requested) setProjectRoot(requested);
     confirmedRoot = projectRoot;
 
     const preview = await getPreview();
@@ -115,7 +124,9 @@ server.registerTool(RENDER_PREVIEW_NAME, renderPreviewConfig, async ({ mainFile,
     const workspace = hasWorkspace();
     const workspaceUrl = workspace ? `${preview.url}/app` : preview.viewerUrl;
     // Open the workspace tab once per server lifetime.
-    if (!viewerOpened) { viewerOpened = true; open(workspaceUrl).catch(() => {}); }
+    // TEXCHRONICLE_NO_OPEN keeps the tab closed for tests and headless runs;
+    // the URL is still in the tool result for anyone who wants it.
+    if (!viewerOpened) { viewerOpened = true; if (!process.env.TEXCHRONICLE_NO_OPEN) open(workspaceUrl).catch(() => {}); }
 
     if (result.success) {
       // Only the bundled engine is handed the collected files, so only there does
@@ -190,16 +201,19 @@ server.registerTool(RENDER_PREVIEW_NAME, renderPreviewConfig, async ({ mainFile,
     const clsHint = missingCls.length
       ? `\n\nThe document class ${missingCls.map((c) => `\`${c}.cls\``).join(', ')} is not in the bundled TeX Live subset, and a class cannot be stubbed the way an unused package can. Put the .cls next to the source — for a conference paper it comes with the author kit, and Overleaf projects can download it.${result.backend === 'system' ? '' : `\n\nA local TeX install would also have it, and TeXChronicle picks one up automatically.\n\n${INSTALL_TEX_HELP}`}`
       : '';
-    // A package the source really uses is deliberately never stubbed — but until
-    // now that left the reader with a raw log line and nothing else. `newtxmath
-    // is required` told one user nothing about why, or that the bundled engine
-    // could not ever supply it, so an agent went and installed a whole TeX
-    // distribution to find out. Say the three things that actually decide what
-    // they do next: what is missing, that the bundled subset cannot provide it,
-    // and what the local-TeX situation on this machine really is.
+    // A missing package otherwise leaves the reader with a raw log line and
+    // nothing else. `newtxmath is required` told one user nothing about why, or
+    // that the bundled engine could not ever supply it, so an agent went and
+    // installed a whole TeX distribution to find out. Say the three things that
+    // actually decide what they do next: what is missing, that the bundled
+    // subset cannot provide it, and what the local-TeX situation on this machine
+    // really is. What this must NOT claim is *why* stubbing was not enough: it
+    // used to say "the source really uses it", which is false whenever
+    // usesPackage() said otherwise and the stub was tried and then discarded
+    // because the compile failed anyway. Report what is known, not a motive.
     const missingPkgs = (result.verdict?.missingPackages ?? []).filter((p) => !missingCls.includes(p));
     const pkgHint = missingPkgs.length && result.backend !== 'system'
-      ? `\n\n${missingPkgs.map((p) => `\`${p}\``).join(', ')} ${missingPkgs.length > 1 ? 'are' : 'is'} not in the bundled TeX Live subset, and the source really uses ${missingPkgs.length > 1 ? 'them' : 'it'} — so ${missingPkgs.length > 1 ? 'they cannot' : 'it cannot'} be stubbed out without rendering something different from what you wrote.\n\n${systemTexAdvice(result.systemTex, { packages: missingPkgs, fallback: result.systemFallback })}`
+      ? `\n\n${missingPkgs.map((p) => `\`${p}\``).join(', ')} ${missingPkgs.length > 1 ? 'are' : 'is'} not in the bundled TeX Live subset and could not be stubbed away without the compile still failing.\n\n${systemTexAdvice(result.systemTex, { packages: missingPkgs, fallback: result.systemFallback })}`
       : '';
     const noteHint = result.notes?.length ? `\n\n${result.notes.join('\n\n')}` : '';
     return {
@@ -295,7 +309,13 @@ server.registerTool(RESOLVE_COMMENT_NAME, resolveCommentConfig, async ({ id, not
   if (typeof projectRoot !== 'string') return projectRoot;
   const current = await matchingCheckpointSha(projectRoot);
   const shown = peekPreview()?.renderState();
-  if (!current.sha || current.dirty || (shown && (shown.status !== 'ok' || shown.checkpoint !== current.sha))) {
+  // On a machine with no history store there is no checkpoint to match and never
+  // will be, so the gate below could not open no matter what the author did:
+  // resolve_comment answered "not the latest successful checkpoint" forever and
+  // the review loop was unusable. Provenance is what cannot be had here — the
+  // resolution itself still can, recorded unlinked and labelled as such.
+  const unlinked = !current.historyAvailable;
+  if (!unlinked && (!current.sha || current.dirty || (shown && (shown.status !== 'ok' || shown.checkpoint !== current.sha)))) {
     return {
       isError: true,
       // Say what to do, not "wait": a plain editor autosave writes the file
@@ -306,7 +326,9 @@ server.registerTool(RESOLVE_COMMENT_NAME, resolveCommentConfig, async ({ id, not
   const updated = await updateComment(projectRoot, id, {
     status: 'resolved',
     resolvedNote: note,
-    resolvedCheckpoint: current.sha,
+    // Omitted rather than undefined when there is no history: the card must not
+    // carry a version claim it cannot support.
+    ...(unlinked ? {} : { resolvedCheckpoint: current.sha }),
   });
   if (!updated) {
     return { isError: true, content: [{ type: 'text', text: `✖ Unknown comment id: ${id}` }] };
@@ -314,7 +336,8 @@ server.registerTool(RESOLVE_COMMENT_NAME, resolveCommentConfig, async ({ id, not
   // Best-effort live nudge — only if a viewer is already up; never cold-start
   // the engine just to broadcast (keeps the loop's resolve calls instant).
   try { peekPreview()?.broadcast({ type: 'comments-changed' }); } catch { /* no viewer */ }
-  return { content: [{ type: 'text', text: `✓ Resolved comment ${id} ("${updated.quote.slice(0, 60)}…") — the card now shows: ${note}` }] };
+  const unlinkedNote = unlinked ? ' (History is off on this machine, so this resolution is not linked to a rendered version.)' : '';
+  return { content: [{ type: 'text', text: `✓ Resolved comment ${id} ("${updated.quote.slice(0, 60)}…") — the card now shows: ${note}${unlinkedNote}` }] };
 });
 
 server.registerTool(ADD_COMMENT_NAME, addCommentConfig, async ({ quote, comment, role, page, accepted }) => {

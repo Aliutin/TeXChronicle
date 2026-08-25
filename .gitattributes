@@ -1,3 +1,10 @@
+# Line endings are decided here rather than by each contributor's core.autocrlf.
+# Without it, a Windows checkout rewrote every text file on the way in and Git
+# reported the whole tree as modified — a diff nobody could read and a review
+# nobody could do. text=auto keeps LF in the repository and lets each platform
+# have what it wants in the working copy.
+* text=auto
+
 # Vendored TeX files are redistributed verbatim under their own licences, so
 # they must not pick up CRLF from a Windows checkout — what we ship should be
 # byte-for-byte what CTAN publishes.

@@ -5,6 +5,10 @@ import { z } from 'zod';
 export const RENDER_PREVIEW_NAME = 'render_preview';
 
 export const renderPreviewInputSchema = {
+  projectRoot: z
+    .string()
+    .optional()
+    .describe('Absolute path to the paper\'s folder. Only needed when this server was not started in the project directory (some MCP clients start servers from the home directory). Sticks for the rest of the session once given.'),
   mainFile: z
     .string()
     .optional()
@@ -26,6 +30,6 @@ export const renderPreviewInputSchema = {
 export const renderPreviewConfig = {
   title: 'Render LaTeX preview',
   description:
-    'Compile the current project\'s LaTeX to a PDF locally and update the live preview. Uses the machine\'s TeX install when it has one, otherwise a bundled WASM TeX Live in a headless browser — so no local TeX is required. Returns compile success/errors, which engine and backend ran, the file count, and the local preview URL — open it to see the rendered pages. Call this after editing .tex files to see and verify the rendered result. The project previewed is the folder this server was started in; if that is not the paper (some MCP clients start their servers from the home directory), the server entry needs "env": { "TEXCHRONICLE_PROJECT": "/abs/path" } or a "--project /abs/path" argument.',
+    'Compile the current project\'s LaTeX to a PDF locally and update the live preview. Uses the machine\'s TeX install when it has one, otherwise a bundled WASM TeX Live in a headless browser — so no local TeX is required. Returns compile success/errors, which engine and backend ran, the file count, and the local preview URL — open it to see the rendered pages. Call this after editing .tex files to see and verify the rendered result. The project previewed is the folder this server was started in; if that is not the paper (some MCP clients start their servers from the home directory), pass "projectRoot": "/abs/path" — it sticks for the rest of the session — or give the server entry "env": { "TEXCHRONICLE_PROJECT": "/abs/path" } or a "--project /abs/path" argument.',
   inputSchema: renderPreviewInputSchema,
 };

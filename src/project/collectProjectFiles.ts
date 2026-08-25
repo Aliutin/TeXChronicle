@@ -29,6 +29,22 @@ const BINARY_EXT = new Set([
 ]);
 const SKIP_DIRS = new Set(['.git', 'node_modules', '.latex-preview', '.vscode', '__pycache__']);
 
+// The subset of TEXT_EXT that TeX resolves *by name* rather than by path:
+// `\documentclass{myvenue}`, `\usepackage{mypkg}`, `\bibliography{refs}`,
+// `\input{body}`. A directory holding one of these has to be on the search path
+// or the file is invisible to a local TeX no matter where it sits. Data files
+// (.csv/.dat) are excluded deliberately — pgfplots reads those through a path
+// the author wrote out, so they never need a lookup and would only lengthen the
+// environment.
+const SEARCHED_EXT = new Set([
+  '.tex', '.ltx', '.inc', '.cls', '.sty', '.bst', '.bib', '.clo', '.def', '.ldf',
+  '.fd', '.bbx', '.cbx', '.lbx', '.bbl', '.ist', '.gst', '.pgf', '.tikz',
+]);
+// A ceiling on the search path itself. Every entry is a directory kpathsea
+// stats on each lookup, and Windows caps a single environment variable at 32 KB;
+// a generated project with a directory per figure would blow through both.
+const MAX_SEARCH_DIRS = 128;
+
 const MAX_TOTAL_BYTES = 60 * 1024 * 1024; // 60 MB
 const MAX_FILES = 800;
 // A ceiling on the scan itself, not on what we send. The caps below need the
@@ -84,6 +100,45 @@ export async function countProjectFiles(
 ): Promise<{ count: number; truncated: boolean; totalBytes: number; skippedFiles: number; skippedBytes: number }> {
   const { count, truncated, totalBytes, skippedFiles, skippedBytes } = await walkProject(projectRoot, false, opts);
   return { count, truncated, totalBytes, skippedFiles, skippedBytes };
+}
+
+/**
+ * The project directories a locally installed TeX has to be told about.
+ *
+ * kpathsea searches its own trees and the current directory, never a project's
+ * subdirectories. So a paper shipping `styles/myvenue.cls` and saying
+ * `\documentclass{myvenue}` — or `bib/refs.bib` and `\bibliography{refs}` —
+ * fails on the system backend with "file not found" while the file is
+ * demonstrably right there, and the bibliography one fails *silently*: bibtex
+ * writes an empty .bbl and every citation renders as `[?]`. The bundled engine
+ * works around this by aliasing those files to the root
+ * (`flattenedClassAliases`); a real TeX wants TEXINPUTS/BIBINPUTS instead.
+ *
+ * Derived from paths `collectProjectFiles` has already returned rather than from
+ * a second traversal, so it is the same walk under the same skip rules
+ * (SKIP_DIRS, dotdirs, `.latex-preview`) and costs nothing extra.
+ *
+ * The result is relative and posix-separated; the caller joins it onto the root.
+ */
+export function searchPathDirs(relativePaths: string[], mainFile?: string): string[] {
+  const mainDir = mainFile ? dirname(toPosix(mainFile).replace(/^\.\//, '')) : '.';
+  // Order is fixed rather than incidental: the main file's own directory first
+  // (with `-cd` that is also the compile's working directory, so it is where a
+  // document's private class most often lives), then the project root, then the
+  // rest shallowest-first. A stable order means the same project produces the
+  // same environment on every compile — latexmk records the environment it ran
+  // under, and a list that reshuffled would force needless rebuilds.
+  const seen = new Set<string>(['.', mainDir]);
+  const rest: string[] = [];
+  for (const rel of relativePaths) {
+    if (!SEARCHED_EXT.has(extOf(rel))) continue;
+    const dir = dirname(toPosix(rel));
+    if (seen.has(dir)) continue;
+    seen.add(dir);
+    rest.push(dir);
+  }
+  rest.sort((a, b) => a.split('/').length - b.split('/').length || (a < b ? -1 : a > b ? 1 : 0));
+  return [mainDir, ...(mainDir === '.' ? [] : ['.']), ...rest].slice(0, MAX_SEARCH_DIRS);
 }
 
 interface Candidate {

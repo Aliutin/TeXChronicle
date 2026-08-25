@@ -478,6 +478,37 @@ export function SourcePanel({
   useEffect(() => () => { if (autoTimer.current) clearTimeout(autoTimer.current); }, []);
   useEffect(() => { localStorage.setItem('ws-live', live ? '1' : '0'); }, [live]);
 
+  // Ctrl/Cmd+S has to work wherever the caret is, not only inside CodeMirror.
+  //
+  // The shortcut lived in the editor's own keymap, so in Live mode — where the
+  // caret sits in the preview's contenteditable — the keystroke never reached
+  // it and the browser's Save-Page dialog answered instead. Being offered a
+  // .html download of the workspace while trying to save a paper is a strange
+  // enough thing to happen that people assumed the editor had crashed.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 's' && event.key !== 'S') return;
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      // Read BEFORE preventing: CodeMirror's keymap runs on the way up to here
+      // and marks the event handled, which is how this tells "already saved"
+      // from "nothing has seen this yet" — and the only thing stopping one
+      // Ctrl+S from issuing two writes.
+      const handledByEditor = event.defaultPrevented;
+      // Either way the browser's dialog must not open, including when this
+      // window is dead: the dialog is never what was wanted.
+      event.preventDefault();
+      if (handledByEditor) return;
+      // A Live-mode edit lives in the contenteditable until it blurs, and the
+      // blur handler is what folds it back into the source buffer. Save first
+      // and the sentence being typed is not in what gets written.
+      const focused = document.activeElement as HTMLElement | null;
+      if (focused?.isContentEditable) focused.blur();
+      void save(true);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [save]);
+
   // Scroll+select a 0-based line in the open editor.
   const jumpToLine = useCallback((line0: number) => {
     const view = cmRef.current?.view;

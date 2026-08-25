@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, watch, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readTextFile, readTextFileWithEtag, writeTextFile } from '../src/preview/filesApi.js';
+import { forgetAssetBoundary, readTextFile, readTextFileWithEtag, resolveIncludeFile, writeTextFile, writeUpload } from '../src/preview/filesApi.js';
 import { forgetHistoryRepo } from '../src/git/historyRepo.js';
 import { startPreviewServer } from '../src/preview/previewServer.js';
 import { setProjectRoot } from '../src/session.js';
@@ -148,5 +149,90 @@ test('a conditional save refuses rather than flatten a change it never saw', asy
     await preview?.close();
     forgetHistoryRepo();
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an uploaded figure is swapped into place, never truncated where it lies', async () => {
+  // Same guarantee as a source save, with more at stake: an upload is a figure
+  // arriving over the network into the directory the compiler and the file tree
+  // both read. `writeFile` truncates first and fills after, so a crash, a full
+  // disk or a killed process in between leaves a half PDF that pdf.js cannot
+  // open — and that the next checkpoint records as the figure's content,
+  // replacing the version that worked.
+  const root = project();
+  const figures = join(root, 'figures');
+  try {
+    mkdirSync(figures, { recursive: true });
+    writeFileSync(join(figures, 'plot.png'), 'THE OLD FIGURE');
+    const uploaded = Buffer.alloc(6 * 1024 * 1024, 0x41);
+
+    const touched = new Set<string>();
+    const watcher = watch(figures, (_event, name) => { if (name) touched.add(String(name)); });
+    try {
+      await writeUpload(root, 'figures/plot.png', uploaded);
+      await new Promise((done) => setTimeout(done, 150)); // let the watch drain
+    } finally {
+      watcher.close();
+    }
+
+    assert.equal(readFileSync(join(figures, 'plot.png')).length, uploaded.length);
+    assert.ok([...touched].some((name) => name.startsWith('.plot.png.tc-save-')),
+      `the upload was written in place rather than renamed over: ${[...touched].join(', ') || 'no events'}`);
+    assert.deepEqual(readdirSync(figures), ['plot.png'], 'a temp file was left in the project');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a git init mid-session changes where figures may be read from', async () => {
+  // Whether a directory sits inside a Git work tree is not a fixed property of
+  // it: an author runs `git init` a week into the paper, or clones the
+  // enclosing repository around a folder they had been working in. The boundary
+  // was resolved once and cached for the life of the process, so the sibling
+  // figures and generated tables that had just become reachable went on
+  // answering "path outside project" until the server was restarted.
+  const parent = mkdtempSync(join(tmpdir(), 'texchronicle-boundary-'));
+  const draft = join(parent, 'draft');
+  try {
+    mkdirSync(draft, { recursive: true });
+    mkdirSync(join(parent, 'tables'), { recursive: true });
+    writeFileSync(join(parent, 'tables', 'results.tex'), 'GENERATED TABLE\n');
+    writeFileSync(join(draft, 'main.tex'), '\input{../tables/results}\n');
+
+    forgetAssetBoundary();
+    await assert.rejects(resolveIncludeFile(draft, '../tables/results.tex'), /outside project/,
+      'a plain folder must stay project-local');
+
+    execFileSync('git', ['init', '--quiet'], { cwd: parent });
+    forgetAssetBoundary();
+    const include = await resolveIncludeFile(draft, '../tables/results.tex');
+    assert.match(include.relativePath, /tables\/results\.tex$/);
+    assert.equal(include.editable, false, 'a file outside the project became writable through the browser');
+  } finally {
+    forgetAssetBoundary();
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test('the asset boundary re-derives itself without being told to', async () => {
+  // Nothing calls the invalidator on the request path, so the expiry is what
+  // actually fixes a live session. Deliberately slow: it is measuring a wait.
+  const parent = mkdtempSync(join(tmpdir(), 'texchronicle-boundary-ttl-'));
+  const draft = join(parent, 'draft');
+  try {
+    mkdirSync(draft, { recursive: true });
+    mkdirSync(join(parent, 'tables'), { recursive: true });
+    writeFileSync(join(parent, 'tables', 'results.tex'), 'GENERATED TABLE\n');
+    writeFileSync(join(draft, 'main.tex'), '\input{../tables/results}\n');
+
+    forgetAssetBoundary();
+    await assert.rejects(resolveIncludeFile(draft, '../tables/results.tex'), /outside project/);
+    execFileSync('git', ['init', '--quiet'], { cwd: parent });
+    await new Promise((done) => setTimeout(done, 5200));
+    const include = await resolveIncludeFile(draft, '../tables/results.tex');
+    assert.match(include.relativePath, /tables\/results\.tex$/);
+  } finally {
+    forgetAssetBoundary();
+    rmSync(parent, { recursive: true, force: true });
   }
 });

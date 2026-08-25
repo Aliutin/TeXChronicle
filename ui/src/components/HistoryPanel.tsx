@@ -31,6 +31,9 @@ export interface HistorySelection {
 export interface HistoryDiffDetail extends HistorySelection {
   diff: string;
   loading: boolean;
+  /** The server could not read these changes. An empty `diff` already means
+   *  "nothing changed here", so a failure needs somewhere else to be said. */
+  error?: string;
 }
 
 const fmt = (iso: string) => {
@@ -68,8 +71,14 @@ export function HistoryPanel({
   const [selectedSection, setSelectedSection] = useState<string | null>(null);
   const [selectedVersion, setSelectedVersion] = useState<string | null>(null);
   const [sectionDiff, setSectionDiff] = useState('');
+  // Why the pane is empty, when it is empty because something failed.
+  const [diffError, setDiffError] = useState('');
   const [includeSubsections, setIncludeSubsections] = useState(false);
   const [busy, setBusy] = useState(false);
+  // A restore now returns as soon as the files are back; the recompile that
+  // follows arrives on the WebSocket. Without saying so the panel went quiet at
+  // the exact moment the longest part of the operation started.
+  const [restored, setRestored] = useState(false);
 
   const section = useMemo(
     () => semantic?.sections.find((candidate) => candidate.id === selectedSection) ?? null,
@@ -123,6 +132,7 @@ export function HistoryPanel({
     const error = await restoreCheckpoint(sha);
     setBusy(false);
     if (error) alert(error);
+    else setRestored(true);
   };
 
   const restoreSemantic = async () => {
@@ -132,7 +142,12 @@ export function HistoryPanel({
     const error = await restoreSection(section.id, version.sha);
     setBusy(false);
     if (error) alert(error);
+    else setRestored(true);
   };
+
+  // The reload that ends the recompile is also what refreshes this timeline, so
+  // it is exactly the right moment to stop reporting one.
+  useEffect(() => { setRestored(false); }, [reloadTick]);
 
   useEffect(() => { fetchGitStatus().then((status) => { setIsRepo(status.isRepo); setMode(status.mode); }); }, []);
 
@@ -167,25 +182,35 @@ export function HistoryPanel({
   }, [activeSelection, onSelectionChange]);
 
   useEffect(() => {
-    if (view !== 'project' || !selected || !activeSelection) { if (view === 'project') setDiff(''); return; }
+    if (view !== 'project' || !selected || !activeSelection) { if (view === 'project') { setDiff(''); setDiffError(''); } return; }
     let cancelled = false;
     setDiff('');
+    setDiffError('');
     onDiffChange?.({ ...activeSelection, diff: '', loading: true });
     fetchDiff(selected).then((result) => {
       if (cancelled) return;
       setDiff(result);
       onDiffChange?.({ ...activeSelection, diff: result, loading: false });
+    }).catch((error) => {
+      if (cancelled) return;
+      // The server's own words. It knows why it could not read the repository;
+      // this pane does not, and inventing "no changes" here is how a broken
+      // history looked like an unchanged one.
+      const failure = String(error?.message ?? error);
+      setDiffError(failure);
+      onDiffChange?.({ ...activeSelection, diff: '', loading: false, error: failure });
     });
     return () => { cancelled = true; };
   }, [activeSelection, onDiffChange, selected, view]);
 
   useEffect(() => {
     if (view !== 'sections' || !selectedSection || !selectedVersion || !activeSelection) {
-      if (view === 'sections') setSectionDiff('');
+      if (view === 'sections') { setSectionDiff(''); setDiffError(''); }
       return;
     }
     let cancelled = false;
     setSectionDiff('');
+    setDiffError('');
     onDiffChange?.({ ...activeSelection, diff: '', loading: true });
     fetchSectionDiff(selectedSection, selectedVersion, includeSubsections)
       .then((result) => {
@@ -195,9 +220,12 @@ export function HistoryPanel({
       })
       .catch((error) => {
         if (cancelled) return;
-        const failure = `diff --git a/section b/section\n@@ -1 +1 @@\n-${String(error?.message ?? error)}\n`;
-        setSectionDiff(failure);
-        onDiffChange?.({ ...activeSelection, diff: failure, loading: false });
+        // This used to be smuggled through as a fabricated one-line diff, which
+        // the diff renderer then displayed as a deleted line of source. It is a
+        // failure report, so it is shown as one.
+        const failure = String(error?.message ?? error);
+        setDiffError(failure);
+        onDiffChange?.({ ...activeSelection, diff: '', loading: false, error: failure });
       });
     return () => { cancelled = true; };
   }, [activeSelection, includeSubsections, onDiffChange, selectedSection, selectedVersion, view]);
@@ -224,6 +252,17 @@ export function HistoryPanel({
 
   return (
     <div className={`history ${showInlineDiff ? '' : 'history-browser'}`}>
+      {/* Only while the compile it started is actually in flight or has failed.
+          Tying it to the live status rather than to a flag of our own means a
+          recompile that finished before the request returned leaves nothing
+          behind to read. */}
+      {restored && (liveStatus === 'compiling' || liveStatus === 'error') && (
+        <div className="history-note" role="status">
+          {liveStatus === 'error'
+            ? 'Restored — the restored source did not compile. The previous PDF is still on screen; the compile log has the details.'
+            : 'Restored. Recompiling — the PDF and this timeline refresh when it finishes.'}
+        </div>
+      )}
       {mode === 'shadow' && (
         <div className="history-note">
           Source history lives in <code>.latex-preview/history.git</code>; exact rendered PDFs live
@@ -329,7 +368,9 @@ export function HistoryPanel({
             </div>
           )}
           {showInlineDiff
-            ? (sectionDiff ? <DiffView diff={sectionDiff} /> : <div className="panel-hint">Select a section version to see its own changes.</div>)
+            ? (diffError
+              ? <div className="panel-hint load-error" role="alert">{diffError}</div>
+              : sectionDiff ? <DiffView diff={sectionDiff} /> : <div className="panel-hint">Select a section version to see its own changes.</div>)
             : <div className="history-side-hint">The precise code difference is shown in the large pane on the right.</div>}
         </>
       ) : (
@@ -354,7 +395,9 @@ export function HistoryPanel({
               </div>
             ))}
           </div>
-          {showInlineDiff && diff ? (
+          {showInlineDiff && diffError ? (
+            <div className="panel-hint load-error" role="alert">{diffError}</div>
+          ) : showInlineDiff && diff ? (
             <DiffView
               diff={diff}
               onRevertFile={selected ? async (file) => {

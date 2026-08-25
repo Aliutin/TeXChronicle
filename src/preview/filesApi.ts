@@ -17,7 +17,11 @@ const MAX_FILES = 500;
 const MAX_FILE_BYTES = 4 * 1024 * 1024;  // 4 MB per LaTeX source
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 MB per uploaded figure
 const ASSET_EXTENSIONS = ['.pdf', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.eps'];
-const assetBoundaryCache = new Map<string, Promise<string>>();
+const assetBoundaryCache = new Map<string, { at: number; boundary: Promise<string> }>();
+// Short enough that `git init` mid-session is noticed in the time it takes to
+// click something, long enough that a burst of figure requests still costs one
+// `rev-parse`. See assetBoundary.
+const ASSET_BOUNDARY_TTL_MS = 5_000;
 
 const toPosix = (p: string) => p.split(sep).join('/');
 
@@ -248,22 +252,37 @@ function graphicsPathsFromSource(source: string): GraphicsSourcePaths {
 /** A paper is often launched from `repo/paper/draft`, while its TeX source uses
  * `../figures/map.pdf`. Editing and history must remain scoped to `draft`, but a
  * read-only artwork route needs the enclosing repository as its natural safety
- * boundary. Plain folders have no such wider boundary and stay project-local. */
+ * boundary. Plain folders have no such wider boundary and stay project-local.
+ *
+ * Cached with an expiry rather than forever. Whether a directory is inside a Git
+ * work tree is not a fixed property of it: an author runs `git init` a week into
+ * the paper, or clones the enclosing repository around a folder they had been
+ * working in, and until this process restarted the boundary stayed whatever it
+ * had been on the very first figure request — so the sibling figures that had
+ * just become reachable went on 404ing with "path outside project", for a
+ * project that plainly was not. The expiry also un-sticks a cached REJECTED
+ * promise, which the permanent version would have served forever. */
 async function assetBoundary(root: string): Promise<string> {
   const rootAbs = normalize(resolve(root));
-  let pending = assetBoundaryCache.get(rootAbs);
-  if (!pending) {
-    pending = (async () => {
-      const repository = (await gitOrNull(rootAbs, ['rev-parse', '--show-toplevel']))?.trim();
-      if (!repository) return rootAbs;
-      const repositoryAbs = normalize(resolve(repository));
-      return rootAbs === repositoryAbs || rootAbs.startsWith(repositoryAbs + sep)
-        ? repositoryAbs
-        : rootAbs;
-    })();
-    assetBoundaryCache.set(rootAbs, pending);
-  }
-  return pending;
+  const cached = assetBoundaryCache.get(rootAbs);
+  if (cached && Date.now() - cached.at < ASSET_BOUNDARY_TTL_MS) return cached.boundary;
+  const boundary = (async () => {
+    const repository = (await gitOrNull(rootAbs, ['rev-parse', '--show-toplevel']))?.trim();
+    if (!repository) return rootAbs;
+    const repositoryAbs = normalize(resolve(repository));
+    return rootAbs === repositoryAbs || rootAbs.startsWith(repositoryAbs + sep)
+      ? repositoryAbs
+      : rootAbs;
+  })();
+  assetBoundaryCache.set(rootAbs, { at: Date.now(), boundary });
+  return boundary;
+}
+
+/** Drop the memo now — for tests, and for anything that already knows the
+ *  project's Git status has changed (the companion to forgetHistoryRepo). */
+export function forgetAssetBoundary(root?: string): void {
+  if (root) assetBoundaryCache.delete(normalize(resolve(root)));
+  else assetBoundaryCache.clear();
 }
 
 /** Resolve a read-only TeX include used to build the Live document model. The
@@ -498,11 +517,20 @@ export async function writeTextFile(
   }
 
   await options.beforeWrite?.();
-
   const bytes = Buffer.from(content, 'utf8');
-  // Same directory, so the rename is a rename and not a cross-volume copy.
-  // Leading dot and a non-source suffix keep it out of the file tree, the
-  // watcher and the checkpoint walk for the moment it exists.
+  await writeAtomic(full, bytes);
+  return { etag: etagOf(bytes) };
+}
+
+/** Replace a file's bytes in one step, so no reader ever sees half of them.
+ *
+ * `writeFile` truncates first and fills after: a crash, a full disk or a killed
+ * process in between leaves the file empty or cut in half, and the file watcher
+ * — polling every 500 ms — can read exactly that state and compile it. The temp
+ * file is a sibling, so the rename is a rename rather than a cross-volume copy;
+ * its leading dot and non-source suffix keep it out of the file tree, the
+ * watcher and the checkpoint walk for the moment it exists. */
+async function writeAtomic(full: string, bytes: Buffer): Promise<void> {
   const temporary = join(dirname(full), `.${basename(full)}.tc-save-${randomBytes(4).toString('hex')}`);
   try {
     await writeFile(temporary, bytes);
@@ -516,15 +544,20 @@ export async function writeTextFile(
     if (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY') throw error;
     await writeFile(full, bytes);
   }
-  return { etag: etagOf(bytes) };
 }
 
-/** Write an uploaded figure/asset (or text file) as raw bytes, guarded. */
+/** Write an uploaded figure/asset (or text file) as raw bytes, guarded.
+ *
+ * Atomic for the same reason a source save is, and with more at stake: an
+ * upload is a 25 MB figure arriving over the network into the directory the
+ * compiler and the file tree both read. A partial write here is a truncated
+ * PDF that pdf.js cannot open and that the next checkpoint records as the
+ * figure's content, replacing whatever was there before. */
 export async function writeUpload(root: string, rel: string, data: Buffer): Promise<void> {
   const clean = String(rel).replace(/^[/\\]+/, '');
   if (!isWritable(clean)) throw new Error('unsupported file type');
   if (data.length > MAX_UPLOAD_BYTES) throw new Error('file too large (max 25 MB)');
   const full = await guardPath(root, clean); // path safety (traversal / protected dirs)
   await mkdir(dirname(full), { recursive: true });
-  await writeFile(full, data);
+  await writeAtomic(full, data);
 }

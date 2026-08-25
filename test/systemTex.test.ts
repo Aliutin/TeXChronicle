@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, writeFileSync, chmodSync, copyFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { probeSystemTex, forgetSystemTex, isStaleLatexmkFailure, posixLatexmkCandidates, sweepStaleBuildDirs, systemBuildDir, systemLatexmkArgs, systemTexResult, systemTexUnavailableMessage, systemTexAdvice } from '../src/engine/systemTex.js';
+import { probeSystemTex, forgetSystemTex, isStaleLatexmkFailure, posixLatexmkCandidates, sweepStaleBuildDirs, systemBuildDir, systemLatexmkArgs, systemTexResult, systemTexUnavailableMessage, systemTexAdvice, MIKTEX_ASK_NOTE, isPosixEmulationPerl, orderLaunchCandidates, miktexInstallerMode, disableInstallerArg } from '../src/engine/systemTex.js';
 
 // "No local TeX" and "a local TeX that cannot run" are different problems with
 // opposite answers, and they used to produce the same sentence. A user installed
@@ -336,4 +336,104 @@ test('a TeX that appears after the first check is not ignored for the rest of th
     restoreDiscovery();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ── MSYS/Cygwin perl shadowing Strawberry Perl (Windows) ─────────────────────
+//
+// Measured on this machine with one project holding `refs.bib` and
+// `\bibliography{refs}`:
+//
+//   from PowerShell   PATH perl = C:\Strawberry\perl\bin\perl.exe ($^O MSWin32)
+//                     -> "Cite [1].  References  [1] Donald E. Knuth. ..."
+//   from Git Bash     PATH perl = /usr/bin/perl                   ($^O cygwin)
+//                     -> latexmk sets BIBINPUTS=/tmp/claude/... and bibtex says
+//                        "I couldn't open database file refs.bib"
+//                     -> "Cite [?].  References" and nothing under the heading
+//
+// The compile succeeds either way. Only the bibliography is missing, so this
+// reaches the reader as their own citation keys being wrong.
+
+test('an MSYS/Cygwin perl on PATH is recognised, and a real Windows perl is not', () => {
+  assert.equal(isPosixEmulationPerl('msys'), true);
+  assert.equal(isPosixEmulationPerl('cygwin'), true);
+  assert.equal(isPosixEmulationPerl('cygwin\n'), true, 'perl prints without a newline, but do not depend on it');
+  assert.equal(isPosixEmulationPerl('MSWin32'), false, "Strawberry Perl and TeX Live's own perl both say this");
+  assert.equal(isPosixEmulationPerl('darwin'), false);
+  assert.equal(isPosixEmulationPerl(undefined), false, 'no perl at all is not a reason to reorder anything');
+});
+
+test('the PATH latexmk normally goes first', () => {
+  assert.deepEqual(orderLaunchCandidates('path', ['strawberry', 'miktex'], false),
+    ['path', 'strawberry', 'miktex'],
+    "it is the user's own choice and the cheapest to launch");
+});
+
+test("but it is demoted when PATH's perl is the broken one", () => {
+  assert.deepEqual(orderLaunchCandidates('path', ['strawberry', 'miktex'], true),
+    ['strawberry', 'miktex', 'path'],
+    "the explicit launches put Strawberry Perl ahead of MSYS on the child's PATH");
+});
+
+test('and demotion never leaves us with nothing to run', () => {
+  // No Strawberry Perl installed: the PATH launch is all there is, broken perl
+  // or not, and dropping it would report "no local TeX" on a machine with one.
+  assert.deepEqual(orderLaunchCandidates('path', [], true), ['path']);
+});
+
+// ── MiKTeX "ask before installing" ───────────────────────────────────────────
+//
+// `[MPM]AutoInstall` is a MiKTeX TriState (False=0, True=1, Undetermined=2 —
+// from MiKTeX's own Configuration/TriState.h), and Undetermined is the "ask me
+// first" the Console sets on a fresh install. The dialog is a GUI window; we
+// spawn the engine with windowsHide, so nobody answers it and the compile sits
+// there until the 120 s idle stop, reported as a wedged toolchain.
+
+test('only a value that really says "ask" changes how the engine is invoked', () => {
+  assert.equal(miktexInstallerMode('2'), 'ask');
+  assert.equal(miktexInstallerMode('1'), 'always');
+  assert.equal(miktexInstallerMode('0'), 'never');
+  // A probe we could not read must leave compiles behaving exactly as before.
+  assert.equal(miktexInstallerMode(''), 'unknown');
+  assert.equal(miktexInstallerMode(undefined), 'unknown');
+  assert.equal(miktexInstallerMode('initexmf: unknown configuration value'), 'unknown');
+});
+
+test("initexmf's warning lines do not get read as the answer", () => {
+  // This machine prints "security risk: running with elevated privileges" ahead
+  // of the value, and not every build sends that to stderr.
+  assert.equal(miktexInstallerMode('initexmf: security risk: running with elevated privileges\n2\n'), 'ask');
+  assert.equal(miktexInstallerMode('initexmf: security risk: running with elevated privileges\n1\n'), 'always',
+    "this machine's actual setting — it must not be read as ask and start disabling the installer");
+});
+
+test('the installer flag names the option latexmk actually has for each engine', () => {
+  // `-xelatex` selects XeLaTeX; the *command* for it is set with `-pdfxelatex=`.
+  // Confirmed against latexmk 4.88 -help. A wrong option name makes latexmk
+  // reject the whole invocation, so every compile would fail, not just this one.
+  assert.equal(disableInstallerArg('pdflatex'), '-pdflatex=pdflatex --disable-installer %O %S');
+  assert.equal(disableInstallerArg('xelatex'), '-pdfxelatex=xelatex --disable-installer %O %S');
+  assert.equal(disableInstallerArg('lualatex'), '-pdflualatex=lualatex --disable-installer %O %S');
+  for (const engine of ['pdflatex', 'xelatex', 'lualatex'] as const) {
+    // latexmk substitutes the options it wants passed through and the source
+    // file into these; dropping either compiles the wrong thing silently.
+    assert.match(disableInstallerArg(engine), /%O %S$/);
+  }
+});
+
+test('and it is absent unless MiKTeX was found to be asking', () => {
+  const ordinary = systemLatexmkArgs('/tmp/build', 'paper.tex', 'xelatex', false, false, false);
+  const asking = systemLatexmkArgs('/tmp/build', 'paper.tex', 'xelatex', false, false, true);
+  assert.ok(!ordinary.some((a) => a.includes('--disable-installer')),
+    'a TeX Live machine has no installer to disable, and would be handed an argument it cannot use');
+  assert.ok(asking.includes('-pdfxelatex=xelatex --disable-installer %O %S'));
+  assert.ok(asking.includes('-xelatex'), 'the engine is still selected the same way');
+});
+
+test('the note names the two things that actually clear the dialog', () => {
+  // Prescribed wording, pinned: this is the only place the reader is told that
+  // the packages are one command away rather than unavailable, and a compile
+  // that has just been stopped is the worst moment to be vague.
+  assert.match(MIKTEX_ASK_NOTE, /mpm --install=<pkg>/, 'the one-off fix');
+  assert.match(MIKTEX_ASK_NOTE, /Always install missing packages/, 'the permanent fix');
+  assert.match(MIKTEX_ASK_NOTE, /cannot answer that dialog/, 'why it did not just work');
 });

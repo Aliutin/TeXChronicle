@@ -176,9 +176,12 @@ has to be pointed at this source checkout:
    ```
 
    `npm install` does *not* download a browser — Playwright has no postinstall
-   hook — and it does not build the workspace UI either. Skip the second command
-   and the first diff or WASM compile fails; skip the third and the preview opens
-   the basic viewer instead of the workspace.
+   hook — so skip the second command and the first diff or WASM compile fails.
+   It *does* build the workspace UI: `npm install` runs the `prepare` script,
+   which is `npm run build:ui`. Run it by hand after editing anything under
+   `ui/`; the third command above is that same build, kept here because a clone
+   whose `prepare` was skipped (`npm install --ignore-scripts`) opens the basic
+   viewer instead of the workspace, with nothing on screen saying why.
 
 2. **Add it to your paper project's `.mcp.json`** (see [`.mcp.json.example`](.mcp.json.example)):
 
@@ -199,8 +202,16 @@ has to be pointed at this source checkout:
    Called directly, `src/server.ts` skips both and fails in ways an MCP client
    reports only as `-32000`.
 
-   After an npm release, the shorter command will be
-   `"command": "npx", "args": ["-y", "texchronicle"]`.
+   Two shorter forms exist, neither usable today:
+
+   - **Once the GitHub repository is public** — it is not yet;
+     `github.com/Aliutin/TeXChronicle` still answers "Repository not found" —
+     peers can skip the clone entirely with
+     `"command": "npx", "args": ["-y", "github:Aliutin/TeXChronicle"]`. npx
+     clones and installs it, and the `prepare` script builds `ui/dist` as part
+     of that install, so the workspace is there without a separate build step.
+     They still need `npx --no-install playwright install chromium --only-shell`.
+   - **After an npm release**, `"command": "npx", "args": ["-y", "texchronicle"]`.
 
 3. **Restart Claude Code** (or `/mcp` reconnect) so it picks up the server.
 
@@ -229,8 +240,17 @@ folder explicitly in that case, either in the server's config entry:
 ```
 
 or as a server argument: `"args": ["/abs/path/to/TeXChronicle/bin/cli.mjs", "--project", "/abs/path/to/paper"]`.
+
+The third way needs no config change at all: pass **`projectRoot`** to
+`render_preview` — *"render a preview of /Users/me/papers/thesis"* is enough for
+Claude to fill it in. It re-points the whole session, so every later tool call
+(comments, history, diffs) uses that folder too, and it is the only one of the
+three an agent can apply on its own, mid-conversation, without you editing a
+config file and restarting the client.
+
 A server started somewhere that holds no `.tex` file says so and stops, rather
-than watching that folder or creating a history store in it.
+than watching that folder or creating a history store in it — and the refusal
+lists all three ways above.
 
 The WASM assets are **not** in this repo. They're fetched on first run into a
 per-user cache — `~/Library/Caches/texchronicle` on macOS, `$XDG_CACHE_HOME/texchronicle`
@@ -248,6 +268,11 @@ you the MCP server **and** slash commands:
 /plugin marketplace add Aliutin/TeXChronicle
 /plugin install texchronicle
 ```
+
+The plugin's server entry is `npx -y texchronicle`, so the plugin needs the **npm
+publish**, not just a public repository — installing it before that release gives
+you the slash commands with a server that cannot start. Until then, add the
+server by hand as in the previous section.
 
 Then, in your paper project, use the **workflow commands** for the common flows:
 
@@ -296,7 +321,7 @@ plain English, or use the slash commands above — these are the underlying tool
 
 | Tool | Parameters | What it does |
 | ---- | ---------- | ------------ |
-| `render_preview` | `mainFile?` · `engine?` (`pdflatex` \| `xelatex` \| `lualatex`, auto-detected when omitted) · `backend?` (`wasm` \| `system` \| `auto`, default `auto` — local latexmk if installed, else the bundled WASM engine) | Compiles the project and opens/refreshes the live workspace. The main file is auto-detected by scanning for `\documentclass` if omitted. |
+| `render_preview` | `projectRoot?` (absolute path to the paper's folder — only needed when the server was not started there; sticks for the rest of the session) · `mainFile?` · `engine?` (`pdflatex` \| `xelatex` \| `lualatex`, auto-detected when omitted) · `backend?` (`wasm` \| `system` \| `auto`, default `auto` — local latexmk if installed, else the bundled WASM engine) | Compiles the project and opens/refreshes the live workspace. The main file is auto-detected by scanning for `\documentclass` if omitted. |
 | `check_comments` | `includeResolved?` (default `false`) | Returns the accepted comments as located work items — page, quoted passage, the source `file:line`, and the ask. Reviewer suggestions awaiting your decision are reported but not returned as work. |
 | `add_comment` | `quote` · `comment` · `role?` (`reviewer` \| `defender`) · `page?` · `accepted?` | Anchors a comment onto a passage. Posts as a *suggestion* awaiting your Accept/Reject unless `accepted` is set — that flag is what makes autonomous mode autonomous. |
 | `resolve_comment` | `id` · `note` | Marks a comment done after the edit, with one line describing what changed. It is accepted only when the current source exactly matches the latest successful rendered checkpoint, then turns **green** in the workspace for your review. |
@@ -415,6 +440,11 @@ or later plus a normal web browser for the workspace window.
   sit on disk until something needs them. Cached per user, not per install, so
   upgrading TeXChronicle doesn't re-download them. Override the location with
   `TEXCHRONICLE_ASSETS_DIR`.
+- Disk inside the paper's own folder: every clean render's PDF is kept at
+  `.latex-preview/renders/<checkpoint>.pdf` so History's **View PDF** can show
+  the exact output of an old version. The newest 50 are kept and older ones
+  deleted — set `TEXCHRONICLE_KEEP_RENDERS` to another number, or to `0` to keep
+  every one. The render currently on screen is never deleted, whatever its age.
 - **A local TeX install is optional.** See below for when it matters.
 
 ### Do I need a local TeX distribution?
@@ -440,6 +470,20 @@ TeXChronicle picks it up on its own — no configuration:
 > **`latexmk -version`**, not `which latexmk`: finding the file does not prove it
 > can run. On macOS you may need `eval "$(/usr/libexec/path_helper)"` or a fresh
 > terminal first.
+
+Two Windows details worth knowing, both handled for you:
+
+- **MiKTeX's "ask before installing"** — the setting a fresh MiKTeX Console leaves
+  you with. Its question is a GUI dialog, and TeXChronicle runs the engine hidden
+  with nobody there to answer it, so the compile would simply hang. TeXChronicle
+  detects that setting, runs with the installer switched off instead, and if the
+  document then wants a package this machine lacks it says so and names the fix
+  (`mpm --install=<pkg>`, or MiKTeX Console → Settings → "Always install missing
+  packages").
+- **Two perls.** If you use Git Bash or MSYS2, a POSIX-emulation `perl` sits on
+  your `PATH` and cannot run MiKTeX's `latexmk`. TeXChronicle notices and prefers
+  a real Strawberry Perl install over the one on `PATH`, so the local backend
+  works without you rearranging anything.
 
 Every compile tells you which one ran — `xelatex · system` or `xelatex · wasm`.
 

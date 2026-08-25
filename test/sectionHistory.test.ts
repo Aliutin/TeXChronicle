@@ -183,11 +183,11 @@ test('checkpoint matching fails closed and includes git-ignored compiler inputs'
     writeFileSync(join(root, 'generated.tex'), 'ORIGINAL GENERATED PROSE\n');
     writeFileSync(join(root, 'figure.pdf'), '%PDF-1.7 original figure\n');
 
-    assert.deepEqual(await matchingCheckpointSha(root), { dirty: true },
+    assert.deepEqual(await matchingCheckpointSha(root), { dirty: true, historyAvailable: true },
       'no successful checkpoint must never be treated as verified');
     const first = await createCheckpoint(root);
     assert.ok(first.sha);
-    assert.deepEqual(await matchingCheckpointSha(root), { sha: first.sha, dirty: false });
+    assert.deepEqual(await matchingCheckpointSha(root), { sha: first.sha, dirty: false, historyAvailable: true });
 
     writeFileSync(join(root, 'generated.tex'), 'CHANGED GENERATED PROSE\n');
     assert.equal((await matchingCheckpointSha(root)).dirty, true,
@@ -216,7 +216,7 @@ test('restore safety snapshots never impersonate successful renders', async () =
 
     await restoreCheckpoint(root, safety.sha);
     const current = await matchingCheckpointSha(root);
-    assert.deepEqual(current, { dirty: true },
+    assert.deepEqual(current, { dirty: true, historyAvailable: true },
       'restoring an unrendered safety snapshot incorrectly made it a successful checkpoint');
   } finally {
     forgetHistoryRepo();

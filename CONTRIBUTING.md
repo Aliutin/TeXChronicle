@@ -48,6 +48,11 @@ keep them that way, and add coverage alongside behaviour changes.
 - Comments and checkpoints are shared across concurrently-running MCP server
   processes; anything that mutates them must go through `src/lock.ts`. See
   [`docs/ROADMAP.md`](docs/ROADMAP.md).
+- **Line endings are pinned in `.gitattributes`** (`* text=auto`), so a Windows
+  checkout no longer turns into a whole-file diff. If your clone shows files as
+  modified with nothing actually changed in them, run `git add --renormalize .`
+  once and commit that by itself — it corrects what the index recorded before the
+  rule existed, and never needs doing twice.
 
 ## Translations
 

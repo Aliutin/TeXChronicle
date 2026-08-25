@@ -72,10 +72,28 @@ async function flagCommentsAfterOlderRestore(
   });
 }
 
+/** The detached recompile started by the most recent finishRestore. Exported so
+ *  a test can wait for work that deliberately outlives the request that began
+ *  it; nothing in the server awaits it. */
+export let pendingRestoreCompile: Promise<void> = Promise.resolve();
+
 /** Complete the non-destructive side effects of a successful source restore.
  * Comment bookkeeping is best effort and compilation is always attempted. A
  * source mutation must never be reported as a failed/no-op merely because the
- * independent comments file was unreadable. */
+ * independent comments file was unreadable.
+ *
+ * The recompile is STARTED here and deliberately not awaited. It used to be:
+ * the HTTP handler sat on the whole run, which on a real paper with the system
+ * TeX backend is minutes — long past any browser's fetch timeout. So the tab
+ * gave up, reported the restore as failed, and offered to try again, while on
+ * disk the restore had succeeded and the compile was still going. The progress
+ * the caller actually wants already reaches the workspace by another route: the
+ * coordinator broadcasts `compiling`, then `reload` or `compile-error`, over the
+ * WebSocket every open tab is already listening on. The one gap is a compile
+ * that never gets as far as reporting for itself — the engine failing to start,
+ * say — which the coordinator cannot broadcast because it never ran; `notify`
+ * exists for exactly that case.
+ */
 export async function finishRestore(
   root: string,
   checkpoint: string,
@@ -85,8 +103,9 @@ export async function finishRestore(
   dependencies: {
     flag?: typeof flagCommentsAfterOlderRestore;
     compile?: () => Promise<{ success: boolean; verdict?: { errors: unknown[] } }>;
+    notify?: (message: { type: 'compile-error'; log: string }) => void;
   } = {},
-): Promise<{ marked: number; compiled: boolean; warning?: string }> {
+): Promise<{ marked: number; compiling: boolean; warning?: string }> {
   let marked = 0;
   let warning: string | undefined;
   try {
@@ -95,17 +114,19 @@ export async function finishRestore(
     warning = `Source restored, but TeXChronicle could not update comment review warnings: ${String((error as Error).message ?? error)}`;
     console.warn(`[TeXChronicle] ${warning}`);
   }
-  try {
-    const result = dependencies.compile
-      ? await dependencies.compile()
-      : await import('../coordinator.js').then(({ requestCompile }) => requestCompile());
-    const compiled = result.success && (!result.verdict || result.verdict.errors.length === 0);
-    return { marked, compiled, ...(warning ? { warning } : {}) };
-  } catch (error) {
-    const compileWarning = `Source restored, but recompilation did not complete: ${String((error as Error).message ?? error)}`;
-    console.warn(`[TeXChronicle] ${compileWarning}`);
-    return { marked, compiled: false, warning: warning ? `${warning} ${compileWarning}` : compileWarning };
-  }
+  const compile = dependencies.compile
+    ?? (() => import('../coordinator.js').then(({ requestCompile }) => requestCompile()));
+  // The handler and its rejection handler are attached in the same tick: an
+  // unhandled rejection here would take the whole server process down.
+  pendingRestoreCompile = Promise.resolve().then(compile).then(
+    () => { /* the coordinator broadcasts its own reload / compile-error */ },
+    (error) => {
+      const message = `Source restored, but the recompile could not run: ${String((error as Error).message ?? error)}`;
+      console.warn(`[TeXChronicle] ${message}`);
+      dependencies.notify?.({ type: 'compile-error', log: message });
+    },
+  );
+  return { marked, compiling: true, ...(warning ? { warning } : {}) };
 }
 import { inverseSyncTeX } from './synctex.js';
 
@@ -151,6 +172,31 @@ const ISOLATION_HEADERS = {
   'Cross-Origin-Embedder-Policy': 'require-corp',
   'Cross-Origin-Resource-Policy': 'cross-origin',
 };
+
+// One sentence, one shape, both routes that serve the working diff. The reader
+// gets the reason git gave, because "could not read" on its own is not
+// actionable and the underlying causes — a full temp directory, a stale
+// index.lock, a figure another application is holding open — each have a
+// different fix.
+const WORKING_DIFF_HEADERS = { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', ...ISOLATION_HEADERS };
+const workingDiffFailure = (error: unknown): string =>
+  `TeXChronicle could not read your working changes: ${String((error as Error)?.message ?? error)}`;
+
+/**
+ * Decode a TeX include for the Live document model without inventing text.
+ *
+ * `readFile(p,'utf8')` decodes leniently: a Latin-1 `chapter.tex` — still
+ * ordinary in older papers, `\usepackage[latin1]{inputenc}` — came back with
+ * every é as U+FFFD, and Live rendered the author's own prose full of replacement
+ * characters while the compiled PDF beside it was perfect. Nothing is ever
+ * written back through this route, so unlike the editor's read (which refuses,
+ * because a save would make the damage permanent) the right answer here is to
+ * decode it the way the file actually is and show the text.
+ */
+function decodeIncludeText(bytes: Buffer): string {
+  try { return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); }
+  catch { return bytes.toString('latin1'); }
+}
 
 /**
  * Serve a file from one of our own asset directories.
@@ -228,6 +274,16 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
     for (const ws of clients) { try { ws.send(data); } catch { /* dropped */ } }
   };
 
+  /** Named here rather than inline on the handle, because the restore routes
+   *  need it too. Going through `send` alone would leave `renderState()`
+   *  reporting 'compiling' after a compile had already failed — and that is the
+   *  value the comment resolution gate reads. */
+  const broadcast = (msg: { type: 'compiling' } | { type: 'compile-error'; log: string } | { type: 'comments-changed' }) => {
+    if (msg.type === 'compiling') compileState = 'compiling';
+    else if (msg.type === 'compile-error') compileState = 'error';
+    send(msg);
+  };
+
   const json = (res: ServerResponse, body: unknown) => {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...ISOLATION_HEADERS });
     res.end(JSON.stringify(body));
@@ -256,13 +312,21 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
     // repo the coordinator checkpoints; git resolves the enclosing repo from there).
     if (pathname === '/git/status') { return json(res, { isRepo: await canTrackHistory(getProjectRoot()), ...(await historyStatus(getProjectRoot())) }); }
     if (pathname === '/git/checkpoints') { return json(res, await listCheckpoints(getProjectRoot())); }
+    // With `sha`, one checkpoint against its parent. Without, the working tree
+    // against the last checkpoint — "what have I changed since?" — which is the
+    // same question /diff-view answers with no sha.
     if (pathname === '/git/diff') {
       const sha = reqUrl.searchParams.get('sha') ?? '';
       try {
-        const diff = await getCheckpointDiff(getProjectRoot(), sha);
+        const diff = sha ? await getCheckpointDiff(getProjectRoot(), sha) : await getWorkingDiff(getProjectRoot());
         res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', ...ISOLATION_HEADERS });
         res.end(diff); return;
       } catch (e) {
+        // A working diff that cannot be read must not arrive as an empty one:
+        // "no changes" is a claim about the author's work, and it is a lie if
+        // the truth is that git could not be run. Fail loudly enough that the
+        // pane shows the reason instead of a reassuring blank.
+        if (!sha) { res.writeHead(500, WORKING_DIFF_HEADERS).end(workingDiffFailure(e)); return; }
         res.writeHead(400, ISOLATION_HEADERS).end(String((e as Error).message)); return;
       }
     }
@@ -285,7 +349,7 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
       try {
         const root = getProjectRoot();
         const restored = await restoreSection(root, section, sha);
-        const completed = await finishRestore(root, sha, 'section', restored.title, restored.path);
+        const completed = await finishRestore(root, sha, 'section', restored.title, restored.path, { notify: broadcast });
         if (completed.marked) send({ type: 'comments-changed' });
         return json(res, { ok: true, ...restored, ...completed });
       } catch (e) {
@@ -312,7 +376,7 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
       try {
         const root = getProjectRoot();
         await restoreCheckpoint(root, sha);
-        const completed = await finishRestore(root, sha, 'project');
+        const completed = await finishRestore(root, sha, 'project', undefined, undefined, { notify: broadcast });
         if (completed.marked) send({ type: 'comments-changed' });
         return json(res, { ok: true, ...completed });
       } catch (e) {
@@ -326,7 +390,7 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
       try {
         const root = getProjectRoot();
         await restoreFile(root, sha, path);
-        const completed = await finishRestore(root, sha, 'file', path, path);
+        const completed = await finishRestore(root, sha, 'file', path, path, { notify: broadcast });
         if (completed.marked) send({ type: 'comments-changed' });
         return json(res, { ok: true, ...completed });
       } catch (e) {
@@ -365,30 +429,47 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
             ...(input.text !== undefined ? { text: input.text } : {}),
             ...(input.resolvedNote !== undefined ? { resolvedNote: input.resolvedNote } : {}),
           };
+          let note: string | undefined;
           if (input.status === 'resolved' || input.restoreReview === null) {
             const current = await matchingCheckpointSha(root);
-            if (!current.sha || current.dirty || compileState !== 'ok' || latestPdfCheckpoint !== current.sha) {
-              // Not "wait": nothing is coming. The editor's plain save suppresses
-              // the watcher (see /api/file above), so after an autosave there is
-              // no compile pending and this state never resolves on its own —
-              // the old message left people watching a spinner that did not
-              // exist. Name the one action that clears it.
-              res.writeHead(409, ISOLATION_HEADERS).end(
-                'The source on disk has not been rendered since it was last saved (a plain editor autosave does not compile). Recompile — Ctrl+S / Recompile in the workspace, or render_preview from an agent — then resolve this comment again.',
-              );
-              return;
+            // The gate is a provenance claim: this comment was resolved against
+            // the exact version you were looking at. Where no history store
+            // exists there is no version to name and no claim to check — and
+            // every part of the test below is unsatisfiable, so refusing meant
+            // a project without git (no git binary, an unwritable path) could
+            // never resolve a comment at all, with an error telling the author
+            // to recompile, which would not have helped either. Let it through
+            // unstamped and say that it is.
+            if (!current.historyAvailable) {
+              note = 'Recorded without a version stamp: this project has no history store, so TeXChronicle cannot say which rendered version this was checked against.';
+              if (input.restoreReview === null) Object.assign(patch, {
+                restoreReview: null,
+                verifiedAt: new Date().toISOString(),
+              });
+            } else {
+              if (!current.sha || current.dirty || compileState !== 'ok' || latestPdfCheckpoint !== current.sha) {
+                // Not "wait": nothing is coming. The editor's plain save suppresses
+                // the watcher (see /api/file above), so after an autosave there is
+                // no compile pending and this state never resolves on its own —
+                // the old message left people watching a spinner that did not
+                // exist. Name the one action that clears it.
+                res.writeHead(409, ISOLATION_HEADERS).end(
+                  'The source on disk has not been rendered since it was last saved (a plain editor autosave does not compile). Recompile — Ctrl+S / Recompile in the workspace, or render_preview from an agent — then resolve this comment again.',
+                );
+                return;
+              }
+              if (input.status === 'resolved') patch.resolvedCheckpoint = current.sha;
+              if (input.restoreReview === null) Object.assign(patch, {
+                restoreReview: null,
+                verifiedCheckpoint: current.sha,
+                verifiedAt: new Date().toISOString(),
+              });
             }
-            if (input.status === 'resolved') patch.resolvedCheckpoint = current.sha;
-            if (input.restoreReview === null) Object.assign(patch, {
-              restoreReview: null,
-              verifiedCheckpoint: current.sha,
-              verifiedAt: new Date().toISOString(),
-            });
           }
           const updated = await updateComment(root, id, patch);
           if (!updated) { res.writeHead(404, ISOLATION_HEADERS).end('unknown comment'); return; }
           send({ type: 'comments-changed' });
-          return json(res, updated);
+          return json(res, note ? { ...updated, note } : updated);
         }
         if (req.method === 'DELETE') {
           const id = reqUrl.searchParams.get('id') ?? '';
@@ -443,7 +524,10 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
       }
       const pdf = latestSyncPdf;
       if (!pdf) return json(res, { available: false });
-      const location = await inverseSyncTeX(getProjectRoot(), pdf, page, x, y);
+      // Under latexmk -cd a TeX Live SyncTeX map records inputs relative to the
+      // main file's directory, so a nested main file needs that directory to
+      // resolve them; MiKTeX writes absolute paths and is unaffected.
+      const location = await inverseSyncTeX(getProjectRoot(), pdf, page, x, y, latestName ? dirname(latestName) : '.');
       return json(res, location ? { available: true, ...location } : { available: false });
     }
 
@@ -463,7 +547,7 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
         const include = await resolveIncludeFile(getProjectRoot(), reqUrl.searchParams.get('path') ?? '');
         return json(res, {
           path: include.relativePath,
-          content: await readFile(include.fullPath, 'utf8'),
+          content: decodeIncludeText(await readFile(include.fullPath)),
           editable: include.editable,
         });
       } catch (e) {
@@ -631,7 +715,15 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
       const root = getProjectRoot();
       const sha = reqUrl.searchParams.get('sha');
       let diff = '';
-      try { diff = sha ? await getCheckpointDiff(root, sha) : await getWorkingDiff(root); } catch { /* empty */ }
+      if (sha) {
+        try { diff = await getCheckpointDiff(root, sha); } catch { /* an unknown checkpoint shows an empty page, as it always has */ }
+      } else {
+        // Same rule as /git/diff: a working diff nobody could read is not an
+        // empty one. This page is what show_diff screenshots, so a blank one
+        // would tell an agent, in a picture, that nothing had changed.
+        try { diff = await getWorkingDiff(root); }
+        catch (e) { res.writeHead(500, WORKING_DIFF_HEADERS).end(workingDiffFailure(e)); return; }
+      }
       res.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store', ...ISOLATION_HEADERS });
       res.end(diffViewHtml(diff)); return;
     }
@@ -703,11 +795,7 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
           }
           send({ type: 'reload', name, checkpoint });
         },
-        broadcast: (msg) => {
-          if (msg.type === 'compiling') compileState = 'compiling';
-          else if (msg.type === 'compile-error') compileState = 'error';
-          send(msg);
-        },
+        broadcast,
         renderState: () => ({ status: compileState, ...(latestPdfCheckpoint ? { checkpoint: latestPdfCheckpoint } : {}) }),
         close: () => new Promise<void>((done) => {
           // Measured, on the version this replaces: with one WebSocket peer that

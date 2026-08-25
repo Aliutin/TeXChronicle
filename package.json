@@ -61,6 +61,7 @@
     "verify:portable:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-portable.ps1",
     "dev:ui": "vite ui",
     "test": "node --require ./bin/userInfoFallback.cjs --import tsx --test test/*.test.ts",
+    "prepare": "npm run build:ui",
     "prepublishOnly": "npm run build:ui"
   },
   "dependencies": {

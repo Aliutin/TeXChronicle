@@ -1064,8 +1064,21 @@ function letterNumber(value: number): string {
   return out || 'A';
 }
 
+/**
+ * Float and equation numbering, shared with the fragments a document parses
+ * inside frames, columns and callouts.
+ *
+ * Those fragments go through parseLatexPreview again (see adoptFragment), and a
+ * fresh parse starts every counter at zero — so two Beamer frames each holding
+ * one figure both produced "Figure 1", and the numbering of everything after
+ * them restarted too. One mutable object threaded through the child parse keeps
+ * the whole document on a single sequence: the child continues where the parent
+ * was, and the parent continues where the child ended.
+ */
+export interface PreviewCounters { figure: number; table: number; equation: number }
+
 /** Parse a complete .tex document or a standalone included section. Never throws. */
-export function parseLatexPreview(source: string): PreviewDocument {
+export function parseLatexPreview(source: string, counters: PreviewCounters = { figure: 0, table: 0, equation: 0 }): PreviewDocument {
   const plain = maskLatexFalseBlocks(maskLatexComments(source));
   const beamerClass = /\\documentclass\s*(?:\[([^\]]*)\]\s*)?\{beamer\}/.exec(plain);
   // A `\begin{frame}` quoted inside verbatim or lstlisting is documentation
@@ -1115,7 +1128,7 @@ export function parseLatexPreview(source: string): PreviewDocument {
 
   const blocks: PreviewBlock[] = [];
   let section = 0, subsection = 0, subsubsection = 0;
-  let figure = 0, table = 0, equation = 0, frame = 0;
+  let frame = 0;
   let appendix = false;
   let titlePlaced = false;
 
@@ -1145,7 +1158,9 @@ export function parseLatexPreview(source: string): PreviewDocument {
 
   const adoptFragment = (fragment: string, absoluteStart: number): PreviewBlock[] => {
     if (!fragment.trim()) return [];
-    const child = parseLatexPreview(fragment);
+    // The same counters object, so figures and tables inside a frame or a
+    // callout continue this document's numbering instead of restarting at 1.
+    const child = parseLatexPreview(fragment, counters);
     const footnoteOffset = footnotes.length;
     const lineDelta = lineOf(absoluteStart) - 1;
     for (const note of child.footnotes) {
@@ -1323,14 +1338,14 @@ export function parseLatexPreview(source: string): PreviewDocument {
 
     if (/^(?:equation\*?|align\*?|alignat\*?|gather\*?|multline\*?|displaymath|math)$/.test(lower)) {
       const numbered = !lower.endsWith('*') && lower !== 'displaymath' && lower !== 'math';
-      const number = numbered ? String(++equation) : undefined;
+      const number = numbered ? String(++counters.equation) : undefined;
       if (number) register(raw, number, 'equation');
       const tex = raw.replace(/\\label\s*\{[^{}]*\}/g, '').replace(/\\(?:nonumber|notag)\b/g, '').trim();
       return tex ? [{ type: 'math', line, tex, number }] : [];
     }
 
     if (lower === 'figure' || lower === 'figure*') {
-      const number = String(++figure);
+      const number = String(++counters.figure);
       const caption = findFloatCaption(raw);
       const assets = [...raw.matchAll(/\\includegraphics\s*(?:\[[^\]]*\]\s*)?\{([^{}]+)\}/g)].map((match) => match[1].trim());
       register(raw, number, 'figure');
@@ -1346,7 +1361,7 @@ export function parseLatexPreview(source: string): PreviewDocument {
     }
 
     if (lower === 'table' || lower === 'table*') {
-      const number = String(++table);
+      const number = String(++counters.table);
       const caption = findFloatCaption(raw);
       register(raw, number, 'table');
       registerPanels(raw, number, 'table');

@@ -32,7 +32,7 @@
 // collector and the export zip, and already excluded from checkpoints
 // themselves.
 import { createHash } from 'node:crypto';
-import { mkdir, access, rename, cp, rm, readFile, writeFile, realpath, stat } from 'node:fs/promises';
+import { mkdir, access, readdir, rename, cp, rm, readFile, writeFile, realpath, stat } from 'node:fs/promises';
 import { join, dirname, extname, resolve } from 'node:path';
 import { legacyCacheRoot } from '../engine/assetsDir.js';
 import { withHistoryInitLock } from '../lock.js';
@@ -58,6 +58,9 @@ export interface HistoryRepo {
   /** For 'unwritable': where it tried, and what the OS said back. Both matter —
    *  a permissions error and a full disk need different responses. */
   detail?: string;
+  /** Refs created while opening this history to rescue checkpoints Dropbox had
+   *  orphaned into a "(conflicted copy)" file. Absent in the ordinary case. */
+  recoveredRefs?: string[];
 }
 
 const NO_GIT: HistoryRepo = { mode: 'no-git', env: {} };
@@ -262,6 +265,78 @@ async function enableAllReflogs(root: string, env: NodeJS.ProcessEnv): Promise<v
   await gitOrNull(root, ['config', 'core.logAllRefUpdates', 'always'], { ...process.env, ...env });
 }
 
+const SUCCESS_REF = 'refs/latex-preview/successful';
+const CONFLICTED_COPY = /conflicted copy/i;
+
+/** `20250824-213000`, from the caller's clock — only ever part of a ref name. */
+function refStamp(): string {
+  const iso = new Date().toISOString();
+  return `${iso.slice(0, 10).replace(/-/g, '')}-${iso.slice(11, 19).replace(/:/g, '')}`;
+}
+
+/**
+ * Rescue a checkpoint chain Dropbox has orphaned.
+ *
+ * A ref is a 41-byte file, and this history sits in a Dropbox folder by design.
+ * When two machines advance the same ref, Dropbox does not merge: it keeps one
+ * and renames the loser to `checkpoints (LAPTOP's conflicted copy 2025-08-24)`.
+ * Git has never heard of that name, so the commits it points at become
+ * unreferenced — invisible in History, and eligible for `git gc` to delete
+ * outright. The author is told nothing, and what is quietly lost is the
+ * timeline of everything they wrote on their other computer.
+ *
+ * Reading a ref is not a change to anyone's configuration, so this runs in the
+ * author's own repository as well as in a shadow one. What it does is minimal
+ * and reversible: a chain that is NOT already reachable is re-anchored under
+ * `refs/latex-preview/recovered/`, where gc can no longer touch it and the
+ * author can look at it; a chain that IS already reachable was a duplicate and
+ * only the stray file goes. A file whose commit this repository does not have
+ * (objects that never finished syncing) is LEFT alone — it is then the only
+ * record that those checkpoints existed at all.
+ */
+async function recoverConflictedRefs(root: string, env: NodeJS.ProcessEnv): Promise<string[]> {
+  const full = { ...process.env, ...env };
+  const gitDir = (await gitOrNull(root, ['rev-parse', '--absolute-git-dir'], full))?.trim();
+  if (!gitDir) return [];
+  const base = join(gitDir, 'refs', 'latex-preview');
+
+  const strays: string[] = [];
+  const walk = async (dir: string, prefix: string): Promise<void> => {
+    for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+      if (entry.isDirectory()) { await walk(join(dir, entry.name), `${prefix}${entry.name}/`); continue; }
+      // Dropbox conflicts the recovery refs too, so this looks all the way down.
+      if (entry.isFile() && CONFLICTED_COPY.test(entry.name)) strays.push(prefix + entry.name);
+    }
+  };
+  await walk(base, '');
+  if (!strays.length) return [];
+
+  const recovered: string[] = [];
+  for (const stray of strays) {
+    const path = join(base, ...stray.split('/'));
+    const sha = (await readFile(path, 'utf8').catch(() => ''))?.trim();
+    if (!/^[0-9a-f]{40,64}$/.test(sha)) continue; // not a ref file at all; not ours to delete
+    if ((await gitOrNull(root, ['cat-file', '-t', sha], full))?.trim() !== 'commit') {
+      console.warn(
+        `[TeXChronicle] Dropbox left a conflicted copy of a history ref (${stray}), and this machine does not have the commit it names yet. Leaving the file alone — it is the only record of those checkpoints.`,
+      );
+      continue;
+    }
+    const reachable = (await gitOrNull(root, ['merge-base', '--is-ancestor', sha, REF], full)) !== null
+      || (await gitOrNull(root, ['merge-base', '--is-ancestor', sha, SUCCESS_REF], full)) !== null;
+    if (!reachable) {
+      const name = `refs/latex-preview/recovered/${refStamp()}-${sha.slice(0, 7)}`;
+      if ((await gitOrNull(root, ['update-ref', name, sha], full)) === null) continue; // keep the file; it is still the only pointer
+      recovered.push(name);
+      console.warn(
+        `[TeXChronicle] Dropbox left a conflicted copy of a history ref (${stray}) holding checkpoints that were not in this timeline. They are kept as ${name} — inspect with: git log ${name}`,
+      );
+    }
+    await rm(path, { force: true }).catch(() => {});
+  }
+  return recovered;
+}
+
 async function usableShadowRepo(root: string, dir: string, env: NodeJS.ProcessEnv): Promise<boolean> {
   if (!(await isRepo(dir))) return false;
   return (await gitOrNull(root, ['rev-parse', '--git-dir'], { ...process.env, ...env })) !== null;
@@ -338,7 +413,12 @@ async function resolveHistoryRepo(root: string, key: string): Promise<HistoryRep
   const repositoryRoot = (await gitOrNull(root, ['rev-parse', '--show-toplevel']))?.trim();
   if (repositoryRoot && await sameDirectory(root, repositoryRoot)) {
     await ignoreToolStorage(root);
-    const resolved: HistoryRepo = { mode: 'project', env: { ...IDENTITY } };
+    const env = { ...IDENTITY };
+    // A project repository can be inside Dropbox too, and its refs conflict the
+    // same way. Best effort: losing the rescue costs the author an orphaned
+    // chain, failing history over it costs them the feature.
+    const recoveredRefs = await recoverConflictedRefs(root, env).catch(() => []);
+    const resolved: HistoryRepo = { mode: 'project', env, ...(recoveredRefs.length ? { recoveredRefs } : {}) };
     cache.set(key, resolved);
     return resolved;
   }
@@ -353,7 +433,8 @@ async function resolveHistoryRepo(root: string, key: string): Promise<HistoryRep
     // most need a recoverable ref chain are the ones that already exist.
     await ignoreToolStorage(root);
     await enableAllReflogs(root, env);
-    const resolved: HistoryRepo = { mode: 'shadow', env };
+    const recoveredRefs = await recoverConflictedRefs(root, env).catch(() => []);
+    const resolved: HistoryRepo = { mode: 'shadow', env, ...(recoveredRefs.length ? { recoveredRefs } : {}) };
     cache.set(key, resolved);
     return resolved;
   } catch (err) {

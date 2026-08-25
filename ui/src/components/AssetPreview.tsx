@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { projectAssetUrl } from '../api';
+import { assetFetchProblem, projectAssetUrl } from '../api';
 import { pdfjs } from '../pdfRuntime';
 import { PdfView } from './PdfView';
 
@@ -15,12 +15,25 @@ const EPS = /\.eps$/i;
 
 const leafName = (path: string): string => path.split(/[\\/]/).pop() || path;
 
+const NOT_FOUND = "PDF not found using this TeX project's figure paths";
+
+/** An HTTP status the fetch already refused on, carried to the one catch that
+ *  writes the message. Without it every failure — a corrupt file, a crashed
+ *  pdf.js worker, a 500 — was reported as a missing one. */
+class AssetHttpError extends Error {
+  constructor(readonly status: number, readonly body: string) {
+    super(assetFetchProblem(status, body, NOT_FOUND));
+    this.name = 'AssetHttpError';
+  }
+}
+
 /** First page of a PDF figure for the lightweight Live document surface. The
  * full asset viewer below reuses PdfView; rendering every page for every figure
  * inside a paper would make Live slower than the compile it is meant to avoid. */
 function PdfFirstPage({ url, name }: { url: string; name: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [problem, setProblem] = useState(NOT_FOUND);
 
   useEffect(() => {
     let cancelled = false;
@@ -30,7 +43,7 @@ function PdfFirstPage({ url, name }: { url: string; name: string }) {
     setState('loading');
     void (async () => {
       const response = await fetch(url);
-      if (!response.ok) throw new Error(await response.text() || 'asset not found');
+      if (!response.ok) throw new AssetHttpError(response.status, await response.text().catch(() => ''));
       const data = new Uint8Array(await response.arrayBuffer());
       if (cancelled) return;
       loadingTask = pdfjs.getDocument({ data });
@@ -53,6 +66,12 @@ function PdfFirstPage({ url, name }: { url: string; name: string }) {
     })().catch((error) => {
       if (!cancelled) {
         console.warn(`[TeXChronicle] could not render figure asset ${name}`, error);
+        // The file arrived and pdf.js could not read it: a corrupt figure, or a
+        // worker that died. Saying "not found" there sent people looking for a
+        // path problem that was not there.
+        setProblem(error instanceof AssetHttpError
+          ? error.message
+          : `This PDF could not be rendered: ${(error as Error)?.message ?? String(error)}`);
         setState('error');
       }
     });
@@ -66,7 +85,7 @@ function PdfFirstPage({ url, name }: { url: string; name: string }) {
   return (
     <div className={`asset-pdf-thumb asset-${state}`}>
       {state === 'loading' && <span>Opening PDF figure…</span>}
-      {state === 'error' && <span>PDF not found using this TeX project's figure paths</span>}
+      {state === 'error' && <span title={problem}>{problem}</span>}
       <canvas ref={canvasRef} aria-label={`First page of ${name}`} />
     </div>
   );

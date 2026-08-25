@@ -32,6 +32,11 @@ node scripts/smoke-history.mjs
 node scripts/smoke-editor-keeps-text.mjs
 ```
 
+`.gitattributes` now pins line endings with `* text=auto`. If a checkout shows
+files as modified with no visible change, run `git add --renormalize .` once and
+commit that on its own — a one-time correction to what the index recorded before
+the rule existed, not something a release needs again.
+
 ## 1. Write the notes, bump the version
 
 `RELEASE-<version>.md` at the repo root. Its body becomes the GitHub release, so

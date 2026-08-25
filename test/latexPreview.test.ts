@@ -500,3 +500,52 @@ test('an edit bordering masked source is reported as unfixable, not as a retry',
   assert.notEqual(change.expected, source.slice(change.from, change.to));
   assert.equal(differsOnlyByMasking(change.expected, source.slice(change.from, change.to)), true);
 });
+
+test('floats keep one sequence across frames and callouts', () => {
+  // A frame body is parsed as its own fragment, and a fresh parse used to start
+  // every counter at zero — so a deck carrying one figure on each of two slides
+  // called both of them "Figure 1", and the numbering of everything after them
+  // restarted as well.
+  const deck = String.raw`\documentclass{beamer}
+\begin{document}
+\begin{frame}{One}
+\begin{figure}
+  \includegraphics{a}
+  \caption{First}\label{fig:one}
+\end{figure}
+\end{frame}
+\begin{frame}{Two}
+\begin{figure}
+  \includegraphics{b}
+  \caption{Second}\label{fig:two}
+\end{figure}
+\end{frame}
+\begin{figure}
+  \includegraphics{c}
+  \caption{Third}\label{fig:three}
+\end{figure}
+\end{document}`;
+  const document = parseLatexPreview(deck);
+  const numbers = nestedBlocks(document.blocks)
+    .filter((block) => block.type === 'figure')
+    .map((block) => (block.type === 'figure' ? block.number : ''));
+  assert.deepEqual(numbers, ['1', '2', '3']);
+  assert.equal(document.references['fig:one'].number, '1');
+  assert.equal(document.references['fig:two'].number, '2');
+  // And the document continues AFTER the fragment rather than from where it
+  // stood before it — the half of this a per-frame counter would still get wrong.
+  assert.equal(document.references['fig:three'].number, '3');
+
+  // Callouts are adopted the same way, so equations inside one behave the same.
+  const paper = parseLatexPreview(String.raw`\documentclass{article}
+\begin{document}
+\begin{equation}\label{eq:one}a = 1\end{equation}
+\begin{block}{An aside}
+\begin{equation}\label{eq:two}b = 2\end{equation}
+\end{block}
+\begin{equation}\label{eq:three}c = 3\end{equation}
+\end{document}`);
+  assert.equal(paper.references['eq:one'].number, '1');
+  assert.equal(paper.references['eq:two'].number, '2');
+  assert.equal(paper.references['eq:three'].number, '3');
+});

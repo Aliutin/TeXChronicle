@@ -35,10 +35,14 @@ export async function canTrackHistory(root: string): Promise<boolean> {
 
 /** Where this project's history lives — and, when it doesn't, why. Callers need
  *  the reason: "install git" and "this path isn't writable" are different
- *  problems, and answering one with the other wastes the reader's time. */
-export async function historyStatus(root: string): Promise<{ mode: HistoryMode; detail?: string }> {
-  const { mode, detail } = await historyRepo(root);
-  return { mode, detail };
+ *  problems, and answering one with the other wastes the reader's time.
+ *
+ *  `recoveredRefs` is present only when opening this history rescued a chain
+ *  Dropbox had orphaned into a "(conflicted copy)" file — see historyRepo.ts.
+ *  Nothing is required of the caller; it exists so a UI can say so. */
+export async function historyStatus(root: string): Promise<{ mode: HistoryMode; detail?: string; recoveredRefs?: string[] }> {
+  const { mode, detail, recoveredRefs } = await historyRepo(root);
+  return { mode, detail, ...(recoveredRefs?.length ? { recoveredRefs } : {}) };
 }
 
 export interface Checkpoint {
@@ -240,7 +244,7 @@ async function writeCurrentTree(root: string, ENV: NodeJS.ProcessEnv): Promise<s
     // are recoverable. Remove only files we can identify as generated output:
     // LaTeX auxiliaries, interpreter caches, and a PDF that has a same-stem TeX
     // source (the compiled document). Standalone PDF figures remain tracked.
-    const generated = await collectGeneratedOutputs(root);
+    const generated = await collectGeneratedOutputs(root, env);
     for (let at = 0; at < generated.length; at += 100) {
       await git(root, ['update-index', '--force-remove', '--', ...generated.slice(at, at + 100)], env);
     }
@@ -285,22 +289,50 @@ export async function createCheckpointUnlocked(root: string): Promise<Checkpoint
   }
 }
 
+export interface CheckpointOptions {
+  /**
+   * Also advance the successful-render marker.
+   *
+   * SUCCESS_REF is a claim about a PDF, not about a tree: it names the version
+   * a reader actually saw rendered, and comment resolution and verification are
+   * gated on it. This function has always advanced it unconditionally, so a
+   * caller who only wanted a snapshot — the honest reading of the name — marked
+   * unrendered, possibly uncompilable source as the last known-good version.
+   * The compile path deliberately does not come through here for that reason
+   * (see createCheckpointFromPrepared, which only commits a tree the compiler
+   * has just rendered).
+   *
+   * Defaults to true so existing callers keep the behaviour they were written
+   * against; say so explicitly, or use `createSuccessfulCheckpoint`, and pass
+   * `{ rendered: false }` for a plain snapshot.
+   */
+  rendered?: boolean;
+}
+
 /**
  * Snapshot the current working tree into the hidden checkpoint chain.
  * No-op (returns {created:false}) when not a git repo or the tree is unchanged
  * since the last checkpoint. Never throws for expected conditions.
  */
-export async function createCheckpoint(root: string): Promise<CheckpointResult> {
+export async function createCheckpoint(root: string, options: CheckpointOptions = {}): Promise<CheckpointResult> {
+  const rendered = options.rendered ?? true;
   return withLock(root, async () => {
     const { env: ENV, mode } = await historyRepo(root);
     if (mode !== 'project' && mode !== 'shadow') return { created: false, reason: 'no-history' };
     const result = await createCheckpointUnlocked(root);
-    if (result.sha) {
+    if (result.sha && rendered) {
       try { await git(root, ['update-ref', SUCCESS_REF, result.sha], ENV); }
       catch (error) { return { created: false, reason: 'failed', error: String((error as Error).message ?? error) }; }
     }
     return result;
   });
+}
+
+/** A checkpoint that also becomes the last known-good rendered version. The
+ *  name is the point: at the call site it is visible that a provenance claim is
+ *  being made, and not only that a snapshot is being taken. */
+export async function createSuccessfulCheckpoint(root: string): Promise<CheckpointResult> {
+  return createCheckpoint(root, { rendered: true });
 }
 
 /**
@@ -336,20 +368,20 @@ export async function latestCheckpointSha(root: string): Promise<string | undefi
 /** The latest checkpoint only when it describes the files on disk right now.
  * Resolution uses this stricter form: a dirty or failed build must not be
  * labelled as the successful version that preceded it. */
-export async function matchingCheckpointSha(root: string): Promise<{ sha?: string; dirty: boolean }> {
+export async function matchingCheckpointSha(root: string): Promise<{ sha?: string; dirty: boolean; historyAvailable: boolean }> {
   return withLock(root, async () => {
     const { env: ENV, mode } = await historyRepo(root);
     // Resolution/verification is a provenance claim. With no history store or
     // no successful checkpoint there is nothing to prove, so fail closed.
-    if (mode !== 'project' && mode !== 'shadow') return { dirty: true };
+    if (mode !== 'project' && mode !== 'shadow') return { dirty: true, historyAvailable: false };
     const sha = await successCheckpointSha(root, ENV);
-    if (!sha) return { dirty: true };
+    if (!sha) return { dirty: true, historyAvailable: true };
     try {
       const [currentTree, checkpointTree] = await Promise.all([
         writeCurrentTree(root, ENV),
         git(root, ['rev-parse', `${sha}^{tree}`], ENV).then((value) => value.trim()),
       ]);
-      if (currentTree === checkpointTree) return { sha, dirty: false };
+      if (currentTree === checkpointTree) return { sha, dirty: false, historyAvailable: true };
       // Equal hashes are the fast path, not the definition. Checkpoints written
       // before TeXChronicle stopped recording its own state also contain
       // .latex-preview and .claude, so their tree can never hash equal to one
@@ -358,9 +390,9 @@ export async function matchingCheckpointSha(root: string): Promise<{ sha?: strin
       // comment. Ask the question the rest of history already asks: does
       // anything OUTSIDE the tool's own directories differ?
       const same = await gitOrNull(root, ['diff', '--quiet', ...SAFE_DIFF, checkpointTree, currentTree, ...EXCLUDE_TOOL], ENV);
-      return same !== null ? { sha, dirty: false } : { dirty: true };
+      return same !== null ? { sha, dirty: false, historyAvailable: true } : { dirty: true, historyAvailable: true };
     } catch {
-      return { dirty: true };
+      return { dirty: true, historyAvailable: true };
     }
   });
 }
@@ -420,15 +452,34 @@ const EXCLUDE_TOOL = ['--', '.', ':(exclude).latex-preview', ':(exclude).claude'
 // code-diff pane whenever a project contained a PDF.
 const SAFE_DIFF = ['--no-ext-diff', '--no-textconv'];
 
-// Inputs the bundled engine collects plus common data/code inputs read by real
-// TeX packages. These are force-added only to TeXChronicle's private index, so a
-// user's .gitignore still behaves exactly as they configured it everywhere else.
+// Inputs the bundled engine collects. These are force-added to TeXChronicle's
+// private index PAST the author's .gitignore, so a paper's own generated
+// compiler inputs — a .bib built by a script, a .tex table, a figure written
+// into an ignored output directory — are part of the version that rendered.
+// The user's .gitignore still behaves exactly as they configured it everywhere
+// else; this list applies only inside our own index.
+//
+// Which is why it is now compile-relevant types ONLY. It used to include
+// .json/.yaml/.yml/.py/.r as "data inputs read by real TeX packages", and the
+// price of that generality was a gitignored `credentials.json` copied into the
+// author's own repository objects under the hidden ref — carried from there by
+// `git push --mirror`, by every clone, and by every backup, having been
+// gitignored precisely so that none of that would happen. Nothing in the
+// generated-.bib/.tex/figures rationale needs an interpreter's file formats,
+// so the whole class goes. A script that generates a table still has its
+// OUTPUT captured; only the script's own config stays out.
 const COMPILE_INPUT_EXTENSIONS = new Set([
-  '.tex', '.bib', '.bbl', '.cls', '.sty', '.bst', '.cfg', '.clo', '.def',
+  '.tex', '.bib', '.bbl', '.cls', '.sty', '.bst', '.clo', '.def',
   '.ldf', '.fd', '.bbx', '.cbx', '.lbx', '.csv', '.tsv', '.dat', '.txt',
-  '.json', '.yaml', '.yml', '.lua', '.py', '.r', '.png', '.jpg', '.jpeg',
-  '.pdf', '.eps', '.svg', '.gif', '.ttf', '.otf',
+  '.ist', '.tikz', '.pgf', '.pdf_tex', '.lua',
+  '.png', '.jpg', '.jpeg', '.pdf', '.eps', '.svg', '.gif', '.ttf', '.otf',
 ]);
+// An extension list cannot see intent, and some names state it outright. A
+// `token.txt`, a `private.dat` or an `.env` beside the paper is not something
+// to copy past its author's .gitignore into a synchronised object store,
+// whatever its extension says. Tested per path segment, so a `secrets/`
+// directory is skipped whole rather than only the files named for it.
+const SECRET_NAME = /(^|[._-])(secret|credential|token|password|private|id_rsa|\.env)/i;
 const CACHE_DIRS = new Set([
   'node_modules', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache',
   '.venv', 'venv',
@@ -447,8 +498,9 @@ async function collectForcedCompileInputs(root: string): Promise<string[]> {
     for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
       const full = join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (!FORCE_SKIP_DIRS.has(entry.name)) await walk(full);
-      } else if (entry.isFile() && COMPILE_INPUT_EXTENSIONS.has(extname(entry.name).toLowerCase())) {
+        if (!FORCE_SKIP_DIRS.has(entry.name) && !SECRET_NAME.test(entry.name)) await walk(full);
+      } else if (entry.isFile() && COMPILE_INPUT_EXTENSIONS.has(extname(entry.name).toLowerCase())
+        && !SECRET_NAME.test(entry.name)) {
         paths.push(relative(root, full).split(sep).join('/'));
       }
     }
@@ -457,42 +509,40 @@ async function collectForcedCompileInputs(root: string): Promise<string[]> {
   return paths;
 }
 
-/** Paths that are products of compiling/interpreting the editable project.
+/** Paths the private index has STAGED that are products of compiling or
+ *  interpreting the project rather than parts of it.
+ *
+ * Asked of the index rather than of the disk, and that is the whole point. This
+ * used to walk the project tree and hand every file under a cache directory to
+ * `update-index --force-remove` — thousands of paths git had never staged,
+ * because the author's .gitignore already excluded them, in batches of 100 with
+ * a process spawned per batch. Measured: a 4 000-file gitignored `.venv` added
+ * ~2.4 s to a tree write, and a tree is written twice per compile plus once per
+ * working diff and once per resolve gate, all of it inside the cross-process
+ * lock. Only what git actually staged can need un-staging, and a single
+ * `ls-files` says exactly what that is — while still catching a cache directory
+ * the author has NOT ignored, which is the one case the walk was really for.
  *
  * PDF needs a semantic rule rather than a blanket extension exclusion: a PDF
  * figure is a real input, while `chapter.tex` beside `chapter.pdf` identifies
  * the latter as a generated document. */
-async function collectGeneratedOutputs(root: string): Promise<string[]> {
+async function collectGeneratedOutputs(root: string, env: NodeJS.ProcessEnv): Promise<string[]> {
+  // -z: raw bytes, so a non-ASCII filename is not handed back C-quoted.
+  const listed = await gitOrNull(root, ['ls-files', '-z'], env);
+  const staged = (listed ?? '').split('\0').filter(Boolean);
+  const inIndex = new Set(staged.map((path) => path.toLocaleLowerCase()));
   const paths: string[] = [];
-  const walk = async (dir: string): Promise<void> => {
-    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
-    const fileNames = new Set(entries.filter((entry) => entry.isFile()).map((entry) => entry.name.toLocaleLowerCase()));
-    for (const entry of entries) {
-      const full = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (entry.name === '.git' || entry.name === '.latex-preview' || entry.name === '.claude') continue;
-        if (CACHE_DIRS.has(entry.name)) {
-          const collectAll = async (cacheDir: string): Promise<void> => {
-            for (const cached of await readdir(cacheDir, { withFileTypes: true }).catch(() => [])) {
-              const cachedFull = join(cacheDir, cached.name);
-              if (cached.isDirectory()) await collectAll(cachedFull);
-              else if (cached.isFile()) paths.push(relative(root, cachedFull).split(sep).join('/'));
-            }
-          };
-          await collectAll(full);
-        } else {
-          await walk(full);
-        }
-        continue;
-      }
-      if (!entry.isFile()) continue;
-      const lower = entry.name.toLocaleLowerCase();
-      const generatedSuffix = GENERATED_SUFFIXES.some((suffix) => lower.endsWith(suffix));
-      const compiledPdf = lower.endsWith('.pdf') && fileNames.has(`${lower.slice(0, -4)}.tex`);
-      if (generatedSuffix || compiledPdf) paths.push(relative(root, full).split(sep).join('/'));
-    }
-  };
-  await walk(root);
+  for (const path of staged) {
+    const lower = path.toLocaleLowerCase();
+    const cached = lower.split('/').slice(0, -1).some((segment) => CACHE_DIRS.has(segment));
+    // Checked in the index AND on disk, because the .tex that identifies a PDF
+    // as the compiled document may itself be gitignored and force-added later.
+    const compiledPdf = lower.endsWith('.pdf') && (
+      inIndex.has(`${lower.slice(0, -4)}.tex`) ||
+      await stat(resolve(root, `${path.slice(0, -4)}.tex`)).then(() => true, () => false)
+    );
+    if (cached || GENERATED_SUFFIXES.some((suffix) => lower.endsWith(suffix)) || compiledPdf) paths.push(path);
+  }
   return paths;
 }
 
@@ -540,20 +590,25 @@ export async function listCheckpoints(root: string): Promise<Checkpoint[]> {
  * Shadow repositories intentionally have no checked-out HEAD, and ordinary
  * `git diff` also omits untracked files. Build a private current tree just as
  * checkpointing does, then compare two immutable trees so both new and edited
- * source files appear without touching the user's index. */
+ * source files appear without touching the user's index.
+ *
+ * THROWS on failure, and that is the fix. Every error here used to become `''`,
+ * which reaches the reader as the sentence "no changes" — over an hour of
+ * edits still sitting on disk. A full tmpdir, a stale index.lock, a figure held
+ * open by another application: each of them silently turned "TeXChronicle
+ * cannot read your work" into "you have not done any", which is the one thing
+ * a diff pane must never say. `''` still means what it always meant — there is
+ * genuinely nothing to show — and a project with no history store returns it
+ * for the same reason. */
 export async function getWorkingDiff(root: string): Promise<string> {
   const { env: ENV, mode } = await historyRepo(root);
   if (mode !== 'project' && mode !== 'shadow') return '';
-  try {
-    const currentTree = await writeCurrentTree(root, ENV);
-    const checkpoint = (await gitOrNull(root, ['rev-parse', '--verify', '-q', REF], ENV))?.trim();
-    const baseTree = checkpoint
-      ? (await git(root, ['rev-parse', `${checkpoint}^{tree}`], ENV)).trim()
-      : EMPTY_TREE;
-    return await git(root, ['diff', ...SAFE_DIFF, baseTree, currentTree, ...EXCLUDE_TOOL], ENV);
-  } catch {
-    return '';
-  }
+  const currentTree = await writeCurrentTree(root, ENV);
+  const checkpoint = (await gitOrNull(root, ['rev-parse', '--verify', '-q', REF], ENV))?.trim();
+  const baseTree = checkpoint
+    ? (await git(root, ['rev-parse', `${checkpoint}^{tree}`], ENV)).trim()
+    : EMPTY_TREE;
+  return await git(root, ['diff', ...SAFE_DIFF, baseTree, currentTree, ...EXCLUDE_TOOL], ENV);
 }
 
 /**

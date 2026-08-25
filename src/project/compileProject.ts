@@ -3,10 +3,10 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { MainFileError, resolveMainFile } from './resolveMainFile.js';
-import { collectProjectFiles } from './collectProjectFiles.js';
+import { collectProjectFiles, searchPathDirs } from './collectProjectFiles.js';
 import { getFallbackStyles } from '../engine/fallbackStyles.js';
 import { compile, type CompileOutput, type EngineFile } from '../engine/browserHost.js';
-import { probeSystemTex, compileWithSystemTex, systemTexUnavailableMessage, type SystemTexProbe, type SystemFallback } from '../engine/systemTex.js';
+import { probeSystemTex, compileWithSystemTex, systemTexUnavailableMessage, MIKTEX_ASK_NOTE, type SystemTexProbe, type SystemFallback } from '../engine/systemTex.js';
 import { classifyCompile, stubPackage, usesPackage, type CompileVerdict } from '../engine/compileLog.js';
 
 export type Engine = 'xelatex' | 'pdflatex' | 'lualatex';
@@ -93,6 +93,10 @@ export async function compileProject(opts: CompileProjectOptions): Promise<Compi
   // better compiler was sitting right there.
   const backend: Backend = opts.backend ?? 'auto';
   let systemFallback: CompileProjectResult['systemFallback'];
+  // Hoisted out of the system branch because it still has to be said when
+  // 'auto' falls through to the bundled engine: the reason the local TeX did not
+  // get there is exactly what this note explains.
+  let sysNotes: string[] = [];
   // Probed once here and reused: the two ways of being unusable need different
   // answers from the reader, and "latexmk is on PATH but cannot run" reported as
   // "no local TeX was found" is what sent a user off to install a distribution
@@ -107,8 +111,22 @@ export async function compileProject(opts: CompileProjectOptions): Promise<Compi
     if (backend === 'system' && !sysProbe.usable) {
       return { success: false, pdf: undefined, pdfLen: 0, log: '', ms: 0, error: systemTexUnavailableMessage(sysProbe), mainFile, engine, backend: 'system', fileCount: size.count, truncated: size.truncated };
     }
-    const out = await compileWithSystemTex(opts.projectRoot, mainFile, engine, opts.shellEscape ?? false);
+    // The project's own input directories go on the TeX search path. kpathsea
+    // does not look inside a project's subdirectories, so without this a paper
+    // shipping `styles/myvenue.cls` or `bib/refs.bib` fails on the local backend
+    // while compiling fine on the bundled one — the opposite of what "full
+    // fidelity" is supposed to mean. Derived from the walk already done above.
+    const searchDirs = searchPathDirs(project.files.map((f) => f.path), mainFile);
+    const out = await compileWithSystemTex(opts.projectRoot, mainFile, engine, opts.shellEscape ?? false, searchDirs);
     const sysVerdict = classifyCompile(out.log ?? '', out.pdfLen);
+    // The engine ran with MiKTeX's installer switched off (it was set to ask,
+    // and there is nobody here to answer its dialog), and the document then
+    // wanted something this machine does not have. Say so: otherwise this looks
+    // like a package that cannot be had, when it is one command away.
+    sysNotes = out.installerDisabled
+      && (sysVerdict.missingPackages.length || sysVerdict.missingClasses.length)
+      ? [MIKTEX_ASK_NOTE]
+      : [];
 
     // Keep the system result whenever it produced something usable — a real TeX
     // with warnings still beats the bundled subset for fidelity.
@@ -120,14 +138,14 @@ export async function compileProject(opts: CompileProjectOptions): Promise<Compi
     // moved to the bundled engine. `success` now means the same thing on both
     // backends: a PDF worth showing came out, errors and all.
     if (sysVerdict.usable) {
-      return { ...out, success: true, verdict: sysVerdict, mainFile, engine, backend: 'system', fileCount: size.count, truncated: size.truncated };
+      return { ...out, success: true, verdict: sysVerdict, notes: sysNotes, mainFile, engine, backend: 'system', fileCount: size.count, truncated: size.truncated };
     }
 
     // Forced 'system' does not fall back. Asking for that backend is a statement
     // that you want that toolchain or an error; quietly substituting another one
     // would answer a question nobody asked.
     if (backend === 'system') {
-      return { ...out, success: false, verdict: sysVerdict, mainFile, engine, backend: 'system', fileCount: size.count, truncated: size.truncated };
+      return { ...out, success: false, verdict: sysVerdict, notes: sysNotes, mainFile, engine, backend: 'system', fileCount: size.count, truncated: size.truncated };
     }
 
     // 'auto': the local TeX couldn't produce a PDF, so continue to the bundled
@@ -155,7 +173,7 @@ export async function compileProject(opts: CompileProjectOptions): Promise<Compi
 
   const { bibtex, rerun: needsRerun } = bibPasses(texSrc, allFiles.map((f) => f.path));
 
-  const notes: string[] = [];
+  const notes: string[] = [...sysNotes];
   const biblatex = biblatexWasmNote(texSrc);
   if (biblatex) notes.push(biblatex);
   // Truncation is disclosed here rather than only in the caller's clean-success

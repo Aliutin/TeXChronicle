@@ -257,6 +257,110 @@ export interface SystemTexProbe {
 
 let probe: SystemTexProbe | undefined;
 
+/**
+ * Does the `perl` on this PATH belong to an MSYS/Cygwin toolchain?
+ *
+ * On Windows this is the difference between a working bibliography and a
+ * silently empty one. Started from Git Bash, `/usr/bin/perl` shadows Strawberry
+ * Perl; MiKTeX's latexmk.exe runs its script under that perl, latexmk then hands
+ * its children POSIX paths (`BIBINPUTS=/tmp/…`), and bibtex — a native Windows
+ * program that has never heard of `/tmp` — answers "I couldn't open database
+ * file refs.bib". LaTeX still writes a PDF, so nothing looks wrong until someone
+ * reads the References section and finds it empty. Measured on this machine:
+ * from PowerShell the same project renders `[1] Donald E. Knuth…`, from Git Bash
+ * `[?]` and a heading with nothing under it.
+ *
+ * Perl reports its own platform in `$^O` — `msys` or `cygwin` for those builds,
+ * `MSWin32` for Strawberry Perl and for TeX Live's bundled one.
+ */
+export function isPosixEmulationPerl(reportedOs: string | undefined): boolean {
+  return /^(?:msys|cygwin)$/i.test((reportedOs ?? '').trim());
+}
+
+/**
+ * Which latexmk to try first.
+ *
+ * Normally whatever is on PATH: it is the user's own choice and the cheapest to
+ * launch. When PATH's perl is an MSYS/Cygwin one that launch is the *broken*
+ * one, so the explicit launches go ahead of it — they prepend Strawberry Perl to
+ * the child's PATH, which is what MiKTeX's script-engine lookup then finds.
+ * Kept pure and separate from the probe because the ordering is the whole
+ * decision, and it is the part worth pinning down in a test.
+ */
+export function orderLaunchCandidates<T>(fromPath: T, explicit: T[], demotePath: boolean): T[] {
+  return demotePath && explicit.length ? [...explicit, fromPath] : [fromPath, ...explicit];
+}
+
+// `null` means "not asked yet"; `undefined` means "asked, and there is no perl
+// on PATH" — which is an answer, and must not be re-asked on every probe.
+let pathPerlOs: string | undefined | null = null;
+
+async function pathPerlIsPosixEmulation(): Promise<boolean> {
+  // Only Windows has the two-perls problem: elsewhere the platform's perl is the
+  // platform's perl, and spawning one to ask would be pure cost.
+  if (process.platform !== 'win32') return false;
+  if (pathPerlOs === null) {
+    pathPerlOs = await pexec('perl', ['-e', 'print $^O'], { timeout: 4000, windowsHide: true })
+      .then((r) => String(r.stdout).trim(), () => undefined);
+  }
+  return isPosixEmulationPerl(pathPerlOs);
+}
+
+/**
+ * What MiKTeX will do about a package the document needs and the machine lacks.
+ *
+ * `[MPM]AutoInstall` is a MiKTeX TriState — 0 never, 1 always, 2 undetermined —
+ * and 2 is the "ask me first" the Console sets on a fresh install, i.e. the
+ * value most of the people this gets shared with will have. It is the one we
+ * cannot live with: the question is a GUI dialog, we spawn the engine with
+ * `windowsHide`, and nobody is there to answer. The compile stops producing
+ * output and sits until the 120 s idle stop, where it is reported as a wedged
+ * toolchain rather than as the missing package it is.
+ *
+ * Anything unrecognised is 'unknown' and changes nothing. Only a positive 'ask'
+ * may alter how the engine is invoked: a probe we could not read must never make
+ * compiles behave differently from how they behave today.
+ */
+export type MiktexInstallerMode = 'always' | 'never' | 'ask' | 'unknown';
+
+export function miktexInstallerMode(raw: string | undefined): MiktexInstallerMode {
+  // initexmf prefixes its answer with warnings on some installations ("security
+  // risk: running with elevated privileges" appears on this one), and not every
+  // build sends them to stderr. The value is the last non-empty line.
+  const lines = (raw ?? '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  switch ((lines[lines.length - 1] ?? '').toLowerCase()) {
+    case '1': case 'true': case 'yes': return 'always';
+    case '0': case 'false': case 'no': return 'never';
+    case '2': case 'ask': case 'undetermined': return 'ask';
+    default: return 'unknown';
+  }
+}
+
+let installerMode: MiktexInstallerMode | undefined;
+
+/** Read `[MPM]AutoInstall` once per process. A missing `initexmf` simply means
+ *  this is not a MiKTeX machine, which is the common case and not an error. */
+export async function probeMiktexInstallerMode(): Promise<MiktexInstallerMode> {
+  if (installerMode) return installerMode;
+  if (process.platform !== 'win32') return (installerMode = 'unknown');
+  // With the environment the compile itself will use: when an explicit launch
+  // won the probe above, initexmf is reachable only through the PATH that launch
+  // prepends.
+  installerMode = await pexec('initexmf', ['--show-config-value=[MPM]AutoInstall'], {
+    timeout: 6000, windowsHide: true, env: latexmkLaunch.env,
+  }).then((r) => miktexInstallerMode(String(r.stdout)), () => 'unknown' as MiktexInstallerMode);
+  return installerMode;
+}
+
+/**
+ * What to say when the installer was switched off and the document then turned
+ * out to need something that is not installed. Without it the reader sees a bare
+ * "file not found" for a package MiKTeX would happily have fetched, and no hint
+ * that the machine is one dialog away from working.
+ */
+export const MIKTEX_ASK_NOTE =
+  'MiKTeX is set to ask before installing packages, and TeXChronicle cannot answer that dialog. Install them once with "mpm --install=<pkg>" or set MiKTeX Console → Settings → "Always install missing packages", then recompile.';
+
 /** Is `latexmk` present AND able to run? */
 export async function probeSystemTex(): Promise<SystemTexProbe> {
   // Only a negative result is re-checked, and only that one can change under us:
@@ -269,7 +373,8 @@ export async function probeSystemTex(): Promise<SystemTexProbe> {
   // A positive result is kept: TeX does not uninstall itself mid-session, and
   // re-probing before every compile would spawn a process for nothing.
   if (probe?.usable) return probe;
-  const launches = [pathLaunch(), ...(await windowsLatexmkLaunches()), ...(await posixLatexmkLaunches())];
+  const explicit = [...(await windowsLatexmkLaunches()), ...(await posixLatexmkLaunches())];
+  const launches = orderLaunchCandidates(pathLaunch(), explicit, await pathPerlIsPosixEmulation());
   let failure: (NodeJS.ErrnoException & { stdout?: string; stderr?: string }) | undefined;
   for (const launch of launches) {
     try {
@@ -311,6 +416,8 @@ export async function hasSystemTex(): Promise<boolean> {
 export function forgetSystemTex(): void {
   probe = undefined;
   latexmkLaunch = pathLaunch();
+  pathPerlOs = null;
+  installerMode = undefined;
 }
 
 /**
@@ -410,6 +517,61 @@ const ENGINE_FLAG: Record<Engine, string> = {
   xelatex: '-xelatex', lualatex: '-lualatex', pdflatex: '-pdf',
 };
 
+// latexmk's option for replacing the *command* that runs an engine. These are
+// not the mode flags above and the names do not match them: `-xelatex` selects
+// XeLaTeX, while the command for it is set with `-pdfxelatex=`. Taken from
+// latexmk 4.88's own `-help` rather than from memory, because latexmk rejects
+// the whole invocation when an option name is wrong.
+const ENGINE_COMMAND_FLAG: Record<Engine, string> = {
+  pdflatex: '-pdflatex', xelatex: '-pdfxelatex', lualatex: '-pdflualatex',
+};
+
+/**
+ * Run the engine with MiKTeX's package installer switched off, so a missing
+ * package fails as a missing package instead of opening a dialog into a hidden
+ * window. `%O` and `%S` are latexmk's placeholders for the options it wants
+ * passed through and the source file; dropping either compiles the wrong thing.
+ */
+export function disableInstallerArg(engine: Engine): string {
+  return `${ENGINE_COMMAND_FLAG[engine] ?? '-pdflatex'}=${engine} --disable-installer %O %S`;
+}
+
+/**
+ * TEXINPUTS/BIBINPUTS/BSTINPUTS for one compile: an explicit list of the
+ * project's own input directories.
+ *
+ * Explicit, not kpathsea's recursive `//` form. `TEXINPUTS=<root>//;` is one
+ * character shorter and makes every single lookup walk the entire project, so a
+ * `.venv` or a `node_modules` beside the paper turns each `\usepackage` into
+ * thousands of stat calls.
+ *
+ * The trailing empty entry is load-bearing: in kpathsea an empty element expands
+ * to the value the distribution configured, so `dirA;dirB;` means "these, then
+ * everything TeX normally searches". Without it this list *replaces* the
+ * distribution's tree and nothing compiles at all — not even article.cls. A
+ * value the user had already set takes that final place instead, so an existing
+ * TEXINPUTS keeps whatever it meant and still gets the project directories.
+ *
+ * The separator is a parameter so both platforms' forms can be pinned down in a
+ * test; production always passes the platform's own.
+ */
+export function texSearchPathEnv(
+  dirs: string[],
+  inherited: NodeJS.ProcessEnv = {},
+  sep: string = delimiter,
+): Record<string, string> {
+  // A directory whose own name contains the separator cannot be expressed in one
+  // of these variables: it would split into two entries that are both wrong.
+  // Legal on POSIX, so it has to be dropped rather than assumed impossible.
+  const usable = dirs.filter((dir) => dir && !dir.includes(sep));
+  if (!usable.length) return {};
+  const env: Record<string, string> = {};
+  for (const name of ['TEXINPUTS', 'BIBINPUTS', 'BSTINPUTS']) {
+    env[name] = [...usable, inherited[name] ?? ''].join(sep);
+  }
+  return env;
+}
+
 /** Public for a small contract test: dropping -synctex=1 silently degrades the
  * viewer back to phrase matching while every ordinary compile still passes. */
 export function systemLatexmkArgs(
@@ -418,6 +580,7 @@ export function systemLatexmkArgs(
   engine: Engine,
   shellEscape = false,
   force = false,
+  disableInstaller = false,
 ): string[] {
   return [
     ENGINE_FLAG[engine] ?? '-pdf', '-synctex=1', '-interaction=nonstopmode', '-file-line-error',
@@ -437,6 +600,7 @@ export function systemLatexmkArgs(
     '-f',
     ...(force ? ['-g'] : []),
     ...(shellEscape ? ['-shell-escape'] : []),
+    ...(disableInstaller ? [disableInstallerArg(engine)] : []),
     `-outdir=${outdir}`, mainRelPath,
   ];
 }
@@ -505,10 +669,27 @@ export function systemBuildDir(root: string, pid = process.pid): string {
   return join(root, '.latex-preview', 'build', `${pid}-${buildSession}`);
 }
 
+export interface SystemCompileOutput extends CompileOutput {
+  /** Set when this run told MiKTeX not to install anything, so a caller that
+   *  sees missing packages can explain that the machine would have offered to
+   *  fetch them and we declined on its behalf. */
+  installerDisabled?: boolean;
+}
+
 /** Compile `mainRelPath` (relative to `root`) with local latexmk; artifacts go
  *  under a process-private .latex-preview/build directory so two independent
- *  TeXChronicle/MCP processes cannot race on the same aux/PDF/SyncTeX files. */
-export async function compileWithSystemTex(root: string, mainRelPath: string, engine: Engine, shellEscape = false): Promise<CompileOutput> {
+ *  TeXChronicle/MCP processes cannot race on the same aux/PDF/SyncTeX files.
+ *
+ *  `searchDirs` are project-relative directories to put on the TeX search path —
+ *  see `texSearchPathEnv`. Empty means "search only what TeX already searches",
+ *  which is the pre-existing behaviour. */
+export async function compileWithSystemTex(
+  root: string,
+  mainRelPath: string,
+  engine: Engine,
+  shellEscape = false,
+  searchDirs: string[] = [],
+): Promise<SystemCompileOutput> {
   const started = Date.now();
   const outdir = systemBuildDir(root);
   await mkdir(outdir, { recursive: true });
@@ -529,12 +710,17 @@ export async function compileWithSystemTex(root: string, mainRelPath: string, en
   // opt-in per call rather than a default. Packages like svg and minted cannot
   // work without it, and the user is the only one who can say whether this
   // particular source is trusted.
-  const args = systemLatexmkArgs(outdir, mainRelPath, engine, shellEscape, hadPdf && !hadSync);
+  const disableInstaller = (await probeMiktexInstallerMode()) === 'ask';
+  const args = systemLatexmkArgs(outdir, mainRelPath, engine, shellEscape, hadPdf && !hadSync, disableInstaller);
+  // The project's own directories, absolute: the child compiles from the main
+  // file's directory under -cd, and a relative entry would then mean something
+  // different from what the caller asked for.
+  const searchEnv = texSearchPathEnv(searchDirs.map((dir) => join(root, dir)), latexmkLaunch.env ?? process.env);
 
-  let { code, out, stopped } = await runLatexmk(root, args);
+  let { code, out, stopped } = await runLatexmk(root, args, searchEnv);
   if (!stopped && code !== 0 && isStaleLatexmkFailure(out)) {
-    const retryArgs = systemLatexmkArgs(outdir, mainRelPath, engine, shellEscape, true);
-    const retry = await runLatexmk(root, retryArgs);
+    const retryArgs = systemLatexmkArgs(outdir, mainRelPath, engine, shellEscape, true, disableInstaller);
+    const retry = await runLatexmk(root, retryArgs, searchEnv);
     code = retry.code;
     stopped = retry.stopped;
     out += `\n\n[TeXChronicle: latexmk retained an earlier failed rule; forced one clean dependency rebuild.]\n${retry.out}`;
@@ -546,6 +732,7 @@ export async function compileWithSystemTex(root: string, mainRelPath: string, en
       ? `your local TeX produced no output for ${IDLE_LIMIT_MS / 1000}s and was stopped after ${waited}s`
       : `your local TeX was still running after ${waited}s and was stopped`;
     return {
+      ...(disableInstaller ? { installerDisabled: true } : {}),
       success: false, exitCode: code ?? 1, pdf: undefined, pdfLen: 0, log: out, ms: Date.now() - started,
       // Named as a stop, not a failure: the document may be perfectly fine. The
       // usual cause is a subprocess waiting on something — a package installer
@@ -560,7 +747,10 @@ export async function compileWithSystemTex(root: string, mainRelPath: string, en
   // A PDF remains useful even if an unusual TeX installation did not emit
   // SyncTeX. The viewer will transparently retain its text-match fallback.
   const syncTex = await readIfFresh(syncPath, started);
-  return systemTexResult(code, out, Date.now() - started, { pdf, syncTex });
+  return {
+    ...systemTexResult(code, out, Date.now() - started, { pdf, syncTex }),
+    ...(disableInstaller ? { installerDisabled: true } : {}),
+  };
 }
 
 /**
@@ -660,13 +850,20 @@ function isProcessAlive(pid: number): boolean {
 
 /** Run latexmk, collecting output and watching for silence. Resolves rather than
  *  throws: a non-zero exit is an ordinary outcome here, not an exception. */
-function runLatexmk(cwd: string, args: string[]): Promise<{ code: number | null; out: string; stopped?: 'idle' | 'cap' }> {
+function runLatexmk(
+  cwd: string,
+  args: string[],
+  extraEnv: Record<string, string> = {},
+): Promise<{ code: number | null; out: string; stopped?: 'idle' | 'cap' }> {
   return new Promise((resolve) => {
     const launch = latexmkLaunch;
+    // `undefined` when there is nothing to add, so the child keeps inheriting
+    // this process's environment rather than being handed a copy of it.
+    const env = Object.keys(extraEnv).length ? { ...(launch.env ?? process.env), ...extraEnv } : launch.env;
     const child = spawn(launch.command, [...launch.prefixArgs, ...args], {
       cwd,
       windowsHide: true,
-      env: launch.env,
+      env,
       // POSIX: its own process group, so killTree can take the group down.
       detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],

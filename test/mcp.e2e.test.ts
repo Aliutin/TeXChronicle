@@ -83,12 +83,24 @@ function fakeHome(): string {
   return home;
 }
 
+/** Inherit the environment, then let `extraEnv` REPLACE a variable rather than
+ *  sit beside it. A plain spread is wrong on Windows: the inherited name is
+ *  `Path`, so overriding `PATH` would leave both keys in the object and the
+ *  child would take whichever it liked — which is precisely the variable the
+ *  no-git test below depends on. */
+const envWith = (extraEnv: Record<string, string>): Record<string, string> => {
+  const clashes = (key: string) => Object.keys(extraEnv).some((k) => k.toLowerCase() === key.toLowerCase());
+  const merged = Object.fromEntries(Object.entries(inheritedEnv).filter(([key]) => !clashes(key)));
+  // Never pop a browser tab out of a test run.
+  return { ...merged, TEXCHRONICLE_NO_OPEN: '1', ...extraEnv };
+};
+
 const connect = async (cwd: string, args: string[] = [], extraEnv: Record<string, string> = {}) => {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [server, ...args],
     cwd,
-    env: { ...inheritedEnv, ...extraEnv },
+    env: envWith(extraEnv),
   });
   const client = new Client({ name: 'ci', version: '0' }, { capabilities: {} });
   await client.connect(transport);
@@ -160,6 +172,87 @@ test('TEXCHRONICLE_PROJECT rescues a server started in the wrong directory', { t
   assert.equal(existsSync(join(proj, '.latex-preview')), true, 'the store belongs to the paper');
   rmSync(home, { recursive: true, force: true });
   rmSync(proj, { recursive: true, force: true });
+});
+
+// The third way to point at the paper, and the only one the agent holding the
+// tools can apply on its own: --project and $TEXCHRONICLE_PROJECT both need the
+// human to edit the client's config and restart it, which is a dead end in the
+// middle of a conversation. Unlike the tests above this one really compiles, so
+// it starts Chromium and the WASM engine — the claim is that the parameter
+// re-points the WHOLE session, and only a real render proves the watcher and the
+// history store moved with it.
+test('render_preview projectRoot re-points a server started in the wrong folder, and sticks', { timeout: 180_000 }, async () => {
+  const home = fakeHome();
+  const proj = mkdtempSync(join(tmpdir(), 'e2e-param-'));
+  writeFileSync(join(proj, 'main.tex'),
+    '\\documentclass{article}\n\\begin{document}\nA parameter-rescued sentence.\n\\end{document}\n');
+  const { client, call } = await connect(home);
+  try {
+    // Fail closed first: a mistyped path is refused, and must not become the
+    // session's root on its way out. Everything after this would still pass if
+    // it had, so it is checked before the good one is ever offered.
+    const bad = await call('render_preview', { projectRoot: join(proj, 'no-such-folder') });
+    assert.equal(bad.isError, true, bad.text);
+    assert.match(bad.text, /does not look like a LaTeX project/);
+
+    const rendered = await call('render_preview', { projectRoot: proj });
+    // A compile can legitimately fail here (no TeX assets on the machine, a
+    // missing package). What it may never do is refuse the folder.
+    assert.doesNotMatch(rendered.text, /does not look like a LaTeX project/, rendered.text);
+
+    // Sticky: a later tool that takes no root of its own must use the new one.
+    const posted = await call('add_comment', { quote: 'A parameter-rescued sentence', comment: 'Rescued by parameter.', accepted: true });
+    assert.equal(posted.isError, false, posted.text);
+    const checked = await call('check_comments');
+    assert.match(checked.text, /main\.tex:3/, 'the anchor must be found in the paper, not the cwd');
+  } finally {
+    await client.close();
+  }
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  assert.equal(existsSync(join(home, '.latex-preview')), false, 'nothing may be written into the cwd');
+  assert.equal(existsSync(join(proj, '.latex-preview')), true, 'the store belongs to the folder the parameter named');
+  rmSync(home, { recursive: true, force: true });
+  rmSync(proj, { recursive: true, force: true });
+});
+
+// Resolution is a provenance claim, so it is gated on the source matching the
+// latest successful checkpoint. With no git there is no checkpoint and never
+// will be, so the gate could not open no matter what the author did: every
+// resolve_comment answered "not the latest successful checkpoint", forever, and
+// the review loop was simply unusable on that machine. The claim is what has to
+// go — not the resolution.
+test('a machine with no git resolves the comment anyway, and says it is unlinked', { timeout: 60_000 }, async () => {
+  const proj = mkdtempSync(join(tmpdir(), 'e2e-nogit-'));
+  writeFileSync(join(proj, 'main.tex'),
+    '\\documentclass{article}\n\\begin{document}\nA sentence with no version to link to.\n\\end{document}\n');
+  // An empty directory as the entire PATH: no `git` anywhere the child can find
+  // one. process.execPath is absolute, so spawning the server itself is safe.
+  const noPath = mkdtempSync(join(tmpdir(), 'e2e-nopath-'));
+  const { client, call } = await connect(proj, [], { PATH: noPath });
+  try {
+    const checkpoints = await call('list_checkpoints');
+    assert.match(checkpoints.text, /History needs git/, 'the fixture must really look like a machine without git');
+
+    const posted = await call('add_comment', { quote: 'A sentence with no version', comment: 'Reword it.', accepted: true });
+    assert.equal(posted.isError, false, posted.text);
+    const id = posted.text.match(/comment ([0-9a-f]{6,})/)?.[1];
+    assert.ok(id, posted.text);
+
+    const resolved = await call('resolve_comment', { id, note: 'reworded' });
+    assert.equal(resolved.isError, false, resolved.text);
+    assert.match(resolved.text, /Resolved comment/);
+    assert.match(resolved.text, /History is off on this machine/);
+
+    const checked = await call('check_comments', { includeResolved: true });
+    assert.match(checked.text, /No accepted comments/);
+    // Resolved, but with no version attached: the card must not carry a
+    // provenance line it cannot back up.
+    assert.doesNotMatch(checked.text, /resolved at [0-9a-f]/);
+  } finally {
+    await client.close();
+  }
+  rmSync(proj, { recursive: true, force: true });
+  rmSync(noPath, { recursive: true, force: true });
 });
 
 // bin/cli.mjs treated argv[2] as a subcommand, so this exact invocation printed

@@ -63,11 +63,11 @@ test('an untouched upgraded project is clean, so a comment can be resolved', asy
     // can never hash equal to one written today even when every file of the
     // paper is identical. The comparison has to exclude the tool's own paths,
     // exactly as the History timeline and the working diff already do.
-    assert.deepEqual(await matchingCheckpointSha(root), { sha: legacy, dirty: false });
+    assert.deepEqual(await matchingCheckpointSha(root), { sha: legacy, dirty: false, historyAvailable: true });
 
     // And it must still notice a real edit.
     writeFileSync(join(root, 'main.tex'), 'v2\n');
-    assert.deepEqual(await matchingCheckpointSha(root), { dirty: true });
+    assert.deepEqual(await matchingCheckpointSha(root), { dirty: true, historyAvailable: true });
   } finally {
     forgetHistoryRepo();
     rmSync(root, { recursive: true, force: true });

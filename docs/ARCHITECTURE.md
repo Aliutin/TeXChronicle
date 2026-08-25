@@ -82,7 +82,10 @@ open is the React workspace with a lightweight `pdf.js` viewer — no WASM in it
   performs reversible subtree restores without changing unrelated parts of the document.
 - `src/git/renderArtifacts.ts` — stores and validates the exact successful PDF for each source
   checkpoint under `.latex-preview/renders/`, outside Git's binary history but inside the project
-  for folder synchronization.
+  for folder synchronization. Bounded rather than unbounded: the newest N are kept
+  (`TEXCHRONICLE_KEEP_RENDERS`, default 50, `0` = keep all) plus the render currently on screen,
+  which can be older than N. Losing an old artifact costs only History's "View PDF" for that
+  checkpoint — the source history never depends on it.
 - `src/git/remote.ts` — parses the GitHub remote (if any) to build the
   Open-in-Overleaf link for public repos.
 - `src/coordinator.ts` — serializes all compiles **within one process** (tool +

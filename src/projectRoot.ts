@@ -92,15 +92,19 @@ async function hasTopLevelTex(root: string): Promise<boolean> {
   return entries.some((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.tex'));
 }
 
-/** Name the directory, then the three ways to point at the paper. The reader is
+/** Name the directory, then the ways to point at the paper. The reader is
  *  usually looking at a client that started the server somewhere they never
- *  chose, so "no .tex files found" on its own tells them nothing they can act on. */
+ *  chose, so "no .tex files found" on its own tells them nothing they can act on.
+ *  The render_preview parameter is listed first on purpose: it is the only one an
+ *  agent reading this error can apply itself, without the human editing a config
+ *  file and restarting the client. */
 function wrongRootHelp(root: string, mainFile?: string): string {
   const missing = mainFile ? `, and no ${mainFile} inside it` : '';
   return `${root} does not look like a LaTeX project — there is no .tex file at its top level${missing}.
 
 TeXChronicle previews the folder its server was started in, and some MCP clients (Claude Desktop among them) start servers from your home directory rather than from the paper. Point it at the paper in one of these ways:
 
+  • call render_preview again with "projectRoot": "/abs/path" — it sticks for the rest of this session
   • add an env block to this server's entry in your MCP config: "env": { "TEXCHRONICLE_PROJECT": "/abs/path" }
   • pass the folder as a server argument: --project /abs/path
   • start the server from the paper's own folder

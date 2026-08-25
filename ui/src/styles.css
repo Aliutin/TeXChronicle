@@ -146,6 +146,19 @@ body.resizing .pdf-scroll, body.resizing .editor-scroll { pointer-events: none; 
 .textLayer span, .textLayer br { color: transparent; position: absolute; white-space: pre;
                                  cursor: text; transform-origin: 0% 0%; }
 .textLayer ::selection { background: rgba(45, 108, 223, .35); }
+/* pdfjs-dist 6 positions each span as a percentage of the page box and hands the
+   font size and advance-width correction to the viewer stylesheet through CSS
+   variables (--font-height, --scale-x, --rotate). The app never loaded that
+   stylesheet, so every span rendered at the inherited 13px regardless of zoom:
+   selection and comment-highlight geometry drifted from the glyphs. These are
+   the viewer rules, keyed on the --scale-factor the page wrapper already sets. */
+.page { --total-scale-factor: var(--scale-factor, 1); }
+.textLayer > :not(.markedContent), .textLayer .markedContent span:not(.markedContent) {
+  --font-height: 0; --scale-x: 1; --rotate: 0deg;
+  font-size: calc(var(--total-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x));
+}
+.textLayer .markedContent { display: contents; }
 
 /* Anchored comment highlights */
 .hl-layer { position: absolute; inset: 0; pointer-events: none; }
@@ -474,8 +487,15 @@ button.ghost.tiny { font-size: 11px; padding: 1px 6px; margin-left: auto; }
 .comment-version { color: #8b949e; font-size: 11px; margin-top: 5px; font-family: ui-monospace, monospace; }
 .comment-restore-warning { color: #ffd580; background: rgba(255, 166, 0, .09); border-left: 2px solid #d29922;
                            font-size: 12px; line-height: 1.35; margin-top: 7px; padding: 6px 8px; }
-.comment-action-error { margin: 8px; padding: 8px 10px; border: 1px solid #a94442; border-radius: 6px;
+.comment-action-error { display: flex; align-items: flex-start; gap: 8px;
+                        margin: 8px; padding: 8px 10px; border: 1px solid #a94442; border-radius: 6px;
                         color: #ffd0cd; background: #3a2020; font-size: 12px; }
+.comment-action-error span { flex: 1 1 auto; }
+.comment-action-error button { flex: 0 0 auto; color: #ffd0cd; }
+/* What the server DID manage to record when it could not record all of it —
+   a fact about this comment, not a failure of the workspace. */
+.comment-server-note { color: #8fb8e8; background: rgba(45, 108, 223, .09); border-left: 2px solid #2d6cdf;
+                       font-size: 12px; line-height: 1.35; margin-top: 7px; padding: 6px 8px; }
 .comment-actions { display: flex; gap: 8px; margin-top: 6px; }
 
 /* ── History ─────────────────────────────────────────────── */

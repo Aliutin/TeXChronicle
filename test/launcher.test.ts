@@ -78,6 +78,23 @@ test('desktop shortcut uses a durable shim with the exact install as an offline 
   assert.match(plan.args.at(-1) ?? '', /Startup failed with exit code/);
 });
 
+// The script runs under $ErrorActionPreference='Stop', where Join-Path on an
+// unset variable is not an empty string but a thrown
+// ParameterBindingValidationException — so on an account without LOCALAPPDATA
+// (a scheduled task, a service account, a stripped-down shell) the installer
+// died on its first line having created nothing. `??` would be the obvious
+// guard and is a syntax error here: the plan targets WindowsPowerShell\v1.0,
+// which is 5.1.
+test('the shortcut installer survives an environment without LOCALAPPDATA', () => {
+  const script = windowsLauncherPlan().args.at(-1) ?? '';
+  assert.doesNotMatch(script, /Join-Path \$env:LOCALAPPDATA/,
+    'the unguarded form throws before anything is created');
+  // An `if`, not `??` — PowerShell 5.1 has no null-coalescing operator, and the
+  // whole script would then fail to parse rather than merely fail to run.
+  assert.match(script, /if \(-not \$localAppData\)/);
+  assert.match(script, /\$env:USERPROFILE/);
+});
+
 test('Windows recent-project chooser reads its index through the environment', () => {
   const recents = resolve('C:/Users/A Person/App Data/TeXChronicle/recent-projects.json');
   const plan = recentProjectsPickerPlan(resolve('C:/Users/A Person/Documents'), recents);

@@ -132,27 +132,51 @@ export async function fetchComments(): Promise<Comment[]> {
   return r.ok ? r.json() : [];
 }
 
-export async function createComment(input: { page: number; quote: string; rects: CommentRect[]; text: string }): Promise<void> {
-  requireLive();
-  await fetch('/api/comments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
+/** Whatever the server said about a refusal, in one line worth showing. */
+async function refusal(response: Response, fallback: string): Promise<Error> {
+  const body = await response.text().catch(() => '');
+  return new Error(body.trim() || `${fallback} (the server answered ${response.status})`);
 }
 
-export async function patchComment(id: string, patch: { status?: CommentStatus; text?: string; restoreReview?: null }): Promise<void> {
+export async function createComment(input: { page: number; quote: string; rects: CommentRect[]; text: string }): Promise<void> {
+  requireLive();
+  const r = await fetch('/api/comments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
+  // These three used to drop `!ok` on the floor, so a comment that never
+  // reached disk left the panel looking exactly like one that did — the reader
+  // learned about it the next time they opened the file and their note was gone.
+  if (!r.ok) throw await refusal(r, 'the comment could not be added');
+}
+
+/** A resolve/verify may succeed with a `note` — see the return value. */
+export async function patchComment(id: string, patch: { status?: CommentStatus; text?: string; restoreReview?: null }): Promise<{ note?: string }> {
   requireLive();
   const r = await fetch(`/api/comments?id=${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
-  if (!r.ok) throw new Error((await r.text()) || 'comment update failed');
+  if (!r.ok) throw await refusal(r, 'comment update failed');
+  // A machine with no history can still resolve and verify: the server records
+  // what it can and says what it could not in `note`, rather than refusing the
+  // whole thing. That is information for the card, not an error — and a server
+  // that answers with an empty body or something that isn't JSON is simply one
+  // that had nothing to add.
+  const body = await r.text().catch(() => '');
+  if (!body.trim()) return {};
+  try {
+    const parsed = JSON.parse(body) as { note?: unknown };
+    return typeof parsed?.note === 'string' && parsed.note.trim() ? { note: parsed.note } : {};
+  } catch { return {}; }
 }
 
 export async function removeComment(id: string): Promise<void> {
   requireLive();
-  await fetch(`/api/comments?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+  const r = await fetch(`/api/comments?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!r.ok) throw await refusal(r, 'the comment could not be removed');
 }
 
 export async function replyComment(id: string, text: string): Promise<void> {
   requireLive();
-  await fetch(`/api/comments/reply?id=${encodeURIComponent(id)}`, {
+  const r = await fetch(`/api/comments/reply?id=${encodeURIComponent(id)}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, by: 'human' }),
   });
+  if (!r.ok) throw await refusal(r, 'the reply could not be posted');
 }
 
 // `disconnected` is a hiccup worth retrying through; `stopped` means the server
@@ -166,9 +190,18 @@ export async function fetchCheckpoints(): Promise<Checkpoint[]> {
   return r.ok ? r.json() : [];
 }
 
+/**
+ * The code changes a checkpoint introduced.
+ *
+ * Throws rather than answering with an empty diff: an empty diff is the pane's
+ * way of saying "nothing changed here", and a server that could not read the
+ * repository at all was borrowing that sentence to report a failure. The two
+ * look identical to the reader and mean opposite things.
+ */
 export async function fetchDiff(sha: string): Promise<string> {
   const r = await fetch(`/git/diff?sha=${encodeURIComponent(sha)}`);
-  return r.ok ? r.text() : '';
+  if (!r.ok) throw await refusal(r, 'the changes for this checkpoint could not be read');
+  return r.text();
 }
 
 export interface SyncTeXSourceLocation {
@@ -283,6 +316,20 @@ export function projectAssetUrl(path: string, refreshKey = 0, from?: string): st
   if (from) query.set('from', from);
   return `/api/asset?${query.toString()}`;
 }
+/**
+ * Why an asset fetch failed, in the reader's terms.
+ *
+ * "Not found using this TeX project's figure paths" is the right sentence for a
+ * 404 and a misleading one for everything else. Reported as the answer to every
+ * failure it sent someone hunting a path problem while the file sat exactly
+ * where they thought it did and the server had thrown on the way to it.
+ */
+export function assetFetchProblem(status: number, body: string, notFound: string): string {
+  if (status === 404) return notFound;
+  const detail = body.split('\n').map((line) => line.trim()).find(Boolean) ?? '';
+  return `The server could not serve this file (HTTP ${status})${detail ? `: ${detail.slice(0, 200)}` : '.'}`;
+}
+
 /** Upload a figure/asset to `path` (relative to the project root). */
 export async function uploadFile(path: string, file: File): Promise<string | null> {
   if (serverGone) return new ServerGoneError().message;

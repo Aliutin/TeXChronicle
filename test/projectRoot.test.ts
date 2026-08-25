@@ -85,12 +85,15 @@ test('a home-shaped directory is refused', async () => {
   await assert.rejects(() => assertLooksLikeProject(root), MainFileError);
 });
 
-test('the refusal names the directory and all three ways to point at the paper', async () => {
+test('the refusal names the directory and every way to point at the paper', async () => {
   const root = dir();
   const error = await assertLooksLikeProject(root).then(() => null, (e: Error) => e);
   assert.ok(error, 'expected a refusal');
   const message = error.message;
   assert.ok(message.includes(root), 'the message must name the directory it refused');
+  // Listed first because it is the only one an agent reading this error can act
+  // on by itself; the other two need the human to edit a config and restart.
+  assert.match(message, /"projectRoot"/);
   assert.match(message, /TEXCHRONICLE_PROJECT/);
   assert.match(message, /--project/);
   assert.match(message, /start the server from the paper's own folder/);

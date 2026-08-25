@@ -11,7 +11,15 @@ const run = promisify(execFile);
 const INSTALL_WINDOWS_SHORTCUTS = String.raw`
 $ErrorActionPreference = 'Stop'
 $utf8 = [System.Text.UTF8Encoding]::new($false)
-$launcherDir = Join-Path $env:LOCALAPPDATA 'TeXChronicle'
+# LOCALAPPDATA is not guaranteed to be set — a scheduled task, a service account
+# or a stripped-down shell can hand us an environment without it. Under
+# 'Stop', Join-Path on the empty value throws, so the installer died with a
+# ParameterBindingValidationException before creating anything, on its very first
+# line. Written as an if rather than ?? because this runs under Windows
+# PowerShell 5.1 (see windowsLauncherPlan), where ?? is a syntax error.
+$localAppData = $env:LOCALAPPDATA
+if (-not $localAppData) { $localAppData = Join-Path $env:USERPROFILE 'AppData\Local' }
+$launcherDir = Join-Path $localAppData 'TeXChronicle'
 [void](New-Item -ItemType Directory -Force -Path $launcherDir)
 $launcher = Join-Path $launcherDir 'launch.cmd'
 $body = @"

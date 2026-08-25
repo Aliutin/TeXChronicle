@@ -344,9 +344,13 @@ export default function App() {
                 !historySelection ? <div className="panel-hint">Choose a section and version on the left.</div>
                   : historyDiffDetail?.key !== historySelection.key || historyDiffDetail.loading
                     ? <div className="panel-hint">Loading precise code changes…</div>
-                    : historyDiffDetail.diff
-                      ? <DiffView diff={historyDiffDetail.diff} />
-                      : <div className="panel-hint">No source text changed in this section at this checkpoint.</div>
+                    : historyDiffDetail.error
+                      // Not "no changes": the server could not read them, which
+                      // is the opposite claim and needs its own sentence.
+                      ? <div className="panel-hint load-error" role="alert">{historyDiffDetail.error}</div>
+                      : historyDiffDetail.diff
+                        ? <DiffView diff={historyDiffDetail.diff} />
+                        : <div className="panel-hint">No source text changed in this section at this checkpoint.</div>
               ) : (
                 <ErrorBoundary name="Historical PDF view">
                   <PdfView
@@ -391,6 +395,7 @@ export default function App() {
               onJump={jumpToComment}
               liveStatus={status}
               pdfCheckpoint={historicalPdf ? undefined : pdfCheckpoint}
+              noHistory={noHistory}
             />
           </ErrorBoundary>
         </div>

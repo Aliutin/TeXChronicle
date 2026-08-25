@@ -114,8 +114,14 @@ citations and references, footnotes, lists, KaTeX equations, figures, and ordina
 project macros are approximated locally instead of blanking the whole document, and the status bar
 lists how many constructs were approximated.
 
+**Ctrl+S** saves from Live as well as from Code — the same save-and-recompile the Code editor does,
+without switching tabs first.
+
 Live is a semantic editor, not a second TeX engine. Use **PDF** for authoritative
-pagination, fonts, floating placement, complex tables, TikZ, and final visual review. **⏎ Wrap** in
+pagination, fonts, floating placement, complex tables, TikZ, and final visual review. The PDF view
+paints pages on demand — the ones on screen plus a couple either side — rather than rasterising the
+whole document first, so an eighty-page paper opens straight away instead of sitting blank while
+every page is drawn. **⏎ Wrap** in
 Code wraps long source lines without changing the file.
 
 ## The file tree
@@ -161,9 +167,12 @@ fuzzy match so you know to inspect that transition rather than trust it silently
 
 The source history lives in the hidden Git ref described below. Exact PDFs live beside it at
 `.latex-preview/renders/<checkpoint>.pdf`; they are excluded from Git because binary PDF deltas
-grow quickly. `renders/` keeps one PDF per checkpoint and is never pruned, so it grows with the
-paper; deleting old `.latex-preview/renders/*.pdf` is safe — the only thing that stops working is
-**View PDF** for those checkpoints, and the source history is untouched. Both are inside the
+grow quickly. The **newest 50 are kept** and older ones deleted, so a figure-heavy paper no longer
+accumulates a full PDF per save inside a synced folder; the render currently on screen is always
+kept, however old it is. Set `TEXCHRONICLE_KEEP_RENDERS` to a different number to change the limit,
+or to `0` to keep every one. Deleting old `.latex-preview/renders/*.pdf` by hand is safe too — the
+only thing that stops working is **View PDF** for those checkpoints, and the source history is
+untouched. Both are inside the
 project folder for plain-folder projects, so Dropbox can carry
 them across machines. Let Dropbox finish syncing before opening the same project elsewhere, and
 avoid editing it concurrently on two machines; a normal Git remote is safer for concurrent source
@@ -216,6 +225,12 @@ found`. If you hit that, drop the package's `.sty` (and fonts) into your project
 preamble. Either way, your final compile on Overleaf uses the real packages — the local preview
 is an approximation.
 
+A `.cls`, `.sty`, `.bst` or `.bib` you ship in a **subdirectory** counts as being in your project:
+both backends now search the project's own folders, so `styles/myvenue.cls` with
+`\documentclass{myvenue}`, or `bib/refs.bib` with `\bibliography{refs}`, resolves without moving
+the file to the root. (TeX itself does not look inside subdirectories, which is why this used to
+fail with the file demonstrably right there — and why the bibliography case failed silently.)
+
 ## Notes
 
 - The compiled PDF is an approximation of what Overleaf produces (a current TeX Live via WASM),
@@ -227,4 +242,9 @@ is an approximation.
   project — so the history moves, copies and is deleted with the folder, and `git` run there still
   reports no repository.
 - Historical PDFs are stored separately under `.latex-preview/renders/`, keyed by checkpoint SHA,
-  and are not added to either your Git history or TeXChronicle's hidden source history.
+  and are not added to either your Git history or TeXChronicle's hidden source history. The newest
+  50 are kept; `TEXCHRONICLE_KEEP_RENDERS` sets a different number, and `0` keeps all of them.
+- If Dropbox (or another sync tool) ever collides on the checkpoint ref itself, it leaves a
+  "conflicted copy" beside it. TeXChronicle keeps whatever that copy pointed at under
+  `refs/latex-preview/recovered/…` rather than letting it be garbage-collected, so the other
+  machine's checkpoints are still reachable instead of silently gone.

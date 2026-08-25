@@ -3,14 +3,44 @@
 // select text on a page → floating "Comment" composer → anchored highlight.
 // A control strip provides Overleaf-style zoom + page navigation; the render
 // scale is state, and highlights are stored at scale 1 and projected by it.
+//
+// Pages are structural, canvases are not. Every page gets a wrapper of exactly
+// the right size and its own text layer the moment the document opens — those
+// are what scroll position, page navigation, search, selection and comment
+// anchoring are built on, and they have to exist for the whole document. The
+// canvas inside a wrapper is painted only while the page is near the viewport
+// (see ../pageWindow), because keeping every page's pixels is what made a long
+// thesis unopenable.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { pdfjs } from '../pdfRuntime';
-import { createComment, inverseSyncTeX, type Comment, type SyncTeXSourceLocation } from '../api';
+import { assetFetchProblem, createComment, inverseSyncTeX, type Comment, type SyncTeXSourceLocation } from '../api';
 import { normalize, phrase } from '../sync';
 import { groupLines, columnsFromTextItems } from '../lines';
+import { pageRenderWindow, type PageRange } from '../pageWindow';
 
 const MIN_SCALE = 0.4;
 const MAX_SCALE = 3;
+/** Viewports of pages kept painted above and below the visible band. */
+const RENDER_SLACK = 2;
+
+type PdfDocument = Awaited<ReturnType<typeof pdfjs.getDocument>['promise']>;
+type PdfPage = Awaited<ReturnType<PdfDocument['getPage']>>;
+type PdfRenderTask = ReturnType<PdfPage['render']>;
+
+/** One page of the open document: its DOM, its pdf.js page, and what its canvas
+ *  currently holds. */
+interface PageEntry {
+  number: number;
+  page: PdfPage;
+  wrap: HTMLDivElement;
+  canvas: HTMLCanvasElement;
+  textLayer: InstanceType<typeof pdfjs.TextLayer>;
+  /** The scale the canvas holds or is being painted at; 0 when it is blank. */
+  drawnScale: number;
+  /** The scale the text layer was last laid out for. */
+  textScale: number;
+  task: PdfRenderTask | null;
+}
 
 interface Draft { page: number; quote: string; rects: { x: number; y: number; w: number; h: number }[]; x: number; y: number }
 interface SyncTarget { text: string; nonce: number }
@@ -49,10 +79,111 @@ export function PdfView({
   const scaleRef = useRef(scale);
   scaleRef.current = scale;
   const reverseSyncSeq = useRef(0);
+  // The pages of the document currently on screen. Owned by the load effect and
+  // read by everything that paints, zooms or releases one.
+  const entriesRef = useRef<PageEntry[]>([]);
+  // Which load these entries belong to. A stray callback from a superseded run
+  // must not report anything, and must not paint into a page nobody can see.
+  const loadSeq = useRef(0);
 
-  // ── Render PDF pages (canvas + text layer) ──────────────────────────────
+  /** Put a page's wrapper at `scaleNow`. The text layer comes along by itself:
+   *  pdf.js positions every span as a percentage of the page box, so a page
+   *  that changes size takes its spans with it. */
+  const layout = useCallback((entry: PageEntry, scaleNow: number) => {
+    const viewport = entry.page.getViewport({ scale: scaleNow });
+    entry.wrap.style.width = `${viewport.width}px`;
+    entry.wrap.style.height = `${viewport.height}px`;
+    // Read back by the highlight projection and by the click→SyncTeX map, so it
+    // has to change with the page rather than with the next repaint.
+    entry.wrap.style.setProperty('--scale-factor', String(scaleNow));
+  }, []);
+
+  /** Paint this page's canvas at the current scale, if it isn't already. */
+  const paint = useCallback((entry: PageEntry, seq: number) => {
+    const scaleNow = scaleRef.current;
+    if (entry.textScale !== scaleNow) {
+      // Re-lays out the spans the layer already holds; no text is fetched or
+      // parsed again. Done here, for the pages being painted, rather than for
+      // the whole document on every zoom click: `update` measures each span
+      // against a canvas context, which on a 300-page paper is hundreds of
+      // thousands of measurements for one press of the − button.
+      entry.textLayer.update({ viewport: entry.page.getViewport({ scale: scaleNow }) });
+      entry.textScale = scaleNow;
+    }
+    if (entry.drawnScale === scaleNow) return; // painted, or being painted, at this size
+    entry.task?.cancel();
+    const viewport = entry.page.getViewport({ scale: scaleNow });
+    const canvas = entry.canvas;
+    // Floor, as assigning the raw float always did: a canvas wider than the
+    // wrapper it sits in overflows it by a fraction of a pixel, and every
+    // highlight is measured against that wrapper's box.
+    canvas.width = Math.floor(viewport.width);
+    canvas.height = Math.floor(viewport.height);
+    entry.drawnScale = scaleNow;
+    // pdf.js v5 made `canvas` the required parameter and demoted
+    // `canvasContext` to a back-compat alias, so pass the element.
+    const task = entry.page.render({ canvas, viewport });
+    entry.task = task;
+    task.promise.then(
+      () => { if (entry.task === task) entry.task = null; },
+      (error: unknown) => {
+        if (entry.task !== task) return; // superseded by a zoom or a release
+        entry.task = null;
+        entry.drawnScale = 0; // nothing on the canvas; let it be repainted
+        // A cancelled render is the normal way out of a zoom or a scroll, and
+        // saying so in the console every time buries the ones that matter.
+        const name = (error as { name?: string })?.name;
+        if (seq === loadSeq.current && name !== 'RenderingCancelledException') {
+          console.warn(`[TeXChronicle] page ${entry.number} did not render`, error);
+        }
+      },
+    );
+  }, []);
+
+  /** Give this page's pixels back. The wrapper keeps its size, so nothing the
+   *  reader can see or scroll to moves. */
+  const release = useCallback((entry: PageEntry) => {
+    if (entry.drawnScale === 0 && !entry.task) return;
+    entry.task?.cancel();
+    entry.task = null;
+    entry.drawnScale = 0;
+    entry.canvas.width = 0;
+    entry.canvas.height = 0;
+    // Without this pdf.js keeps the page's operator list and fonts alive, which
+    // is the other half of what made scrolling a long paper grow without bound.
+    entry.page.cleanup();
+  }, []);
+
+  /** Bring the painted pages back in line with where the reader is looking.
+   *  Answers with the range it decided on, or null when there was nothing to
+   *  measure yet. */
+  const reconcile = useCallback((): PageRange | null => {
+    const scroller = scrollRef.current;
+    const entries = entriesRef.current;
+    if (!scroller || !entries.length) return null;
+    // A rebuild after a recompile assembles its pages in a fragment and swaps
+    // them in at the end. A detached element measures as 0×0, and a list of
+    // zero-height pages all overlap the viewport — which would paint the entire
+    // document at once, the exact thing this is here to prevent.
+    if (!entries[0].wrap.isConnected) return null;
+    const seq = loadSeq.current;
+    // Every measurement first, then every mutation: interleaving them makes the
+    // browser re-lay-out the whole page list once per page.
+    const boxes = entries.map((entry) => ({ top: entry.wrap.offsetTop, height: entry.wrap.offsetHeight }));
+    const band = pageRenderWindow(boxes, scroller.scrollTop, scroller.clientHeight, RENDER_SLACK);
+    entries.forEach((entry, index) => {
+      if (index >= band.first && index <= band.last) paint(entry, seq);
+      else release(entry);
+    });
+    return band;
+  }, [paint, release]);
+
+  // ── Open the PDF: one wrapper and one text layer per page ───────────────
   useEffect(() => {
     let cancelled = false;
+    const seq = ++loadSeq.current;
+    const entries: PageEntry[] = [];
+    entriesRef.current = entries;
     let loadingTask: ReturnType<typeof pdfjs.getDocument> | undefined;
     // What the render was doing when it threw. A rendering failure reported as
     // bare `String(e)` cost three rounds of guessing on a real bug: the message
@@ -71,7 +202,14 @@ export function PdfView({
       if (cancelled) return;
       if (!res.ok) {
         setNoteIsReport(false);
-        setNote(missingMessage ?? 'No PDF yet — wait for the initial compile or click Recompile.');
+        // A 404 is "there is no PDF here" — the compile has not run yet, or the
+        // figure path is wrong. Anything else is the server failing, and saying
+        // "no PDF yet" about a 500 sent people to click Recompile forever.
+        setNote(assetFetchProblem(
+          res.status,
+          await res.text().catch(() => ''),
+          missingMessage ?? 'No PDF yet — wait for the initial compile or click Recompile.',
+        ));
         return;
       }
       const data = new Uint8Array(await res.arrayBuffer());
@@ -91,6 +229,11 @@ export function PdfView({
       // used to look completely blank until all 80+ pages had rendered.
       const hadPages = container.childElementCount > 0;
       const next = document.createDocumentFragment();
+      // Once the opening screenful has been decided there is nothing for the
+      // pages below it to change until the reader moves, and re-measuring the
+      // whole list after every appended page is what would make a long document
+      // slower to open, not faster.
+      let bandSettled = false;
       for (let i = 1; i <= doc.numPages; i++) {
         if (cancelled) return;
         if (hadPages || i === 1) setNote(`Rendering page ${i} of ${doc.numPages}…`);
@@ -106,8 +249,12 @@ export function PdfView({
         wrap.style.height = `${vp.height}px`;
         wrap.style.setProperty('--scale-factor', String(scaleRef.current));
         const canvas = document.createElement('canvas');
-        canvas.width = vp.width;
-        canvas.height = vp.height;
+        // Deliberately empty. The wrapper above already holds this page's final
+        // size, so the document's full height, every scroll offset and every
+        // highlight coordinate are correct before a single pixel is drawn —
+        // which is what lets the drawing wait until the page is nearly in view.
+        canvas.width = 0;
+        canvas.height = 0;
         wrap.appendChild(canvas);
         const textDiv = document.createElement('div');
         textDiv.className = 'textLayer';
@@ -116,11 +263,10 @@ export function PdfView({
         hlDiv.className = 'hl-layer';
         wrap.appendChild(hlDiv);
         next.appendChild(wrap);
-        // pdf.js v5 made `canvas` the required parameter and demoted
-        // `canvasContext` to a back-compat alias, so pass the element.
-        step = `page ${i}/${doc.numPages}: canvas render`;
-        await pg.render({ canvas, viewport: vp }).promise;
-        if (cancelled) return;
+        // The text layer is built for EVERY page, near the viewport or not: it
+        // is what comment anchoring, the source↔PDF jump, browser search and
+        // text selection all read. A page without one is a page where a
+        // reviewer's comment silently loses its highlight.
         step = `page ${i}/${doc.numPages}: text layer`;
         const textLayer = new pdfjs.TextLayer({ textContentSource: pg.streamTextContent(), container: textDiv, viewport: vp });
         await textLayer.render();
@@ -152,15 +298,23 @@ export function PdfView({
         } catch (e) {
           console.warn(`[texchronicle] column detection skipped — ${step}`, e);
         }
-        // Everything this run needs from the page is done. Without cleanup
-        // pdf.js keeps each page's operator list and fonts alive, so scrolling a
-        // long paper grew memory until the tab was unusable.
+        // Everything this run needs from the page for now is done. Without
+        // cleanup pdf.js keeps each page's operator list and fonts alive, so
+        // scrolling a long paper grew memory until the tab was unusable. A page
+        // that is about to be painted defers this until its render finishes,
+        // and one painted later simply asks the worker again.
         pg.cleanup();
         // Three awaits stand between the guard at the top of this iteration and
         // this line. A superseded run that reaches here appends a page from the
         // OLD document into the container the new run is filling: two nodes with
         // data-page="1", and goToPage jumps to whichever comes first.
         if (cancelled) return;
+        const entry: PageEntry = { number: i, page: pg, wrap, canvas, textLayer, drawnScale: 0, textScale: vp.scale, task: null };
+        entries.push(entry);
+        // A zoom during a long load moves the scale out from under the pages
+        // already built; the effect that handles it only sees the ones pushed
+        // by then, so this page catches itself up.
+        if (scaleRef.current !== vp.scale) layout(entry, scaleRef.current);
         if (!hadPages) {
           // Moving the wrapper out of the fragment makes the page visible;
           // later pages continue rendering without covering page 1 with a
@@ -170,6 +324,13 @@ export function PdfView({
             setNote('');
             setRenderTick((t) => t + 1);
           }
+          // Now that this page is in the document it can be measured, so the
+          // opening screenful is painted while the rest of the text layers are
+          // still being built rather than after all of them.
+          if (!bandSettled) {
+            const band = reconcile();
+            bandSettled = Boolean(band && band.last < entries.length - 1);
+          }
         }
       }
       if (cancelled) return;
@@ -177,6 +338,8 @@ export function PdfView({
       setNote('');
       setRenderTick((t) => t + 1);
       scroller.scrollTop = ratio * scroller.scrollHeight;
+      // Pages swapped in as one fragment could not be measured until now.
+      reconcile();
     })().catch((e) => {
       // A superseded run must not speak. Every other exit in this effect is gated
       // on `cancelled`; the catch was not, so a run abandoned by a zoom click or
@@ -206,14 +369,41 @@ export function PdfView({
     });
     return () => {
       cancelled = true;
+      for (const entry of entries) { entry.task?.cancel(); entry.page.cleanup(); }
+      if (entriesRef.current === entries) entriesRef.current = [];
       // With workerSrc each loading task owns its worker. Release it when a PDF
-      // asset is closed or zoom starts a replacement render; otherwise checking
-      // several figures leaves one worker and document transport alive per file.
+      // asset is closed or a reload starts a replacement render; otherwise
+      // checking several figures leaves one worker and document transport alive
+      // per file.
       void loadingTask?.destroy().catch(() => {});
     };
-  }, [reloadTick, scale, onPages, pdfUrl, missingMessage]);
+    // Deliberately without `scale`. A zoom used to re-enter all of this: refetch
+    // the bytes over HTTP, hand them to a fresh worker, reparse the document and
+    // rebuild every page — for a change in how large the same pages are drawn.
+    // On a long paper that was seconds of work and a visibly empty pane per
+    // click. The effect below resizes what is already open instead.
+  }, [reloadTick, onPages, pdfUrl, missingMessage, layout, reconcile]);
 
-  // ── Track which page is in view (for the page indicator) ────────────────
+  // ── Zoom: resize the open document, never reload it ─────────────────────
+  useEffect(() => {
+    const entries = entriesRef.current;
+    const scroller = scrollRef.current;
+    if (!entries.length || !scroller) return;
+    // Preserve the reading position as a ratio, as the loader does.
+    const ratio = scroller.scrollHeight ? scroller.scrollTop / scroller.scrollHeight : 0;
+    // Resizing every wrapper is cheap and has to be complete: a page below the
+    // fold still contributes its height to where the pages after it sit, and a
+    // comment anchored on it is measured against its box.
+    for (const entry of entries) layout(entry, scale);
+    scroller.scrollTop = ratio * scroller.scrollHeight;
+    reconcile();
+    // Geometry has moved, so the highlights have to be projected again. This
+    // effect is declared before the one that draws them, so it sees the new
+    // sizes rather than the ones being replaced.
+    setRenderTick((t) => t + 1);
+  }, [scale, layout, reconcile]);
+
+  // ── Track which page is in view, and what is worth painting ─────────────
   useEffect(() => {
     const scroller = scrollRef.current;
     if (!scroller) return;
@@ -228,11 +418,21 @@ export function PdfView({
           if (el.offsetTop <= mid) best = Number(el.dataset.page);
         }
         setCurrentPage(best);
+        reconcile();
       });
     };
     scroller.addEventListener('scroll', onScroll, { passive: true });
-    return () => { scroller.removeEventListener('scroll', onScroll); cancelAnimationFrame(raf); };
-  }, [renderTick]);
+    // Dragging a side panel changes what fits on screen without producing a
+    // single scroll event, and a page that became visible that way would stay
+    // blank until the reader happened to scroll.
+    const resize = new ResizeObserver(() => reconcile());
+    resize.observe(scroller);
+    return () => {
+      scroller.removeEventListener('scroll', onScroll);
+      cancelAnimationFrame(raf);
+      resize.disconnect();
+    };
+  }, [renderTick, reconcile]);
 
   const zoomBy = (f: number) => setScale((s) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, +(s * f).toFixed(3))));
   const fitWidth = () => {
@@ -473,8 +673,16 @@ export function PdfView({
         const layer = pageEl?.querySelector('.hl-layer');
         if (!layer) continue;
         const boxes = liveBoxes(pageEl!, c.quote);
+        // Frozen rectangles are only trustworthy on the version they were taken
+        // from, so a comment made against a KNOWN OTHER checkpoint keeps none.
+        // The test used to be the other way round — draw only when both
+        // checkpoints are known and equal — which meant a machine with no
+        // history, where nothing ever carries a checkpoint, drew no highlight
+        // for any comment whose quote had moved. The reader saw comments in the
+        // panel with nothing marked in the PDF and no explanation for it.
+        const staleRects = Boolean(c.createdCheckpoint && pdfCheckpoint && c.createdCheckpoint !== pdfCheckpoint);
         if (boxes) for (const b of boxes) box(layer, c, statusCls, b.l, b.t, b.w, b.h);
-        else if (c.createdCheckpoint && c.createdCheckpoint === pdfCheckpoint) {
+        else if (!staleRects) {
           for (const r of c.rects) box(layer, c, statusCls, r.x * scale, r.y * scale, r.w * scale, r.h * scale);
         }
         continue;

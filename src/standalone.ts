@@ -49,12 +49,31 @@ Examples:
 
 Keep this terminal open while editing. Press Ctrl+C to stop TeXChronicle.`;
 
+/**
+ * Undo what enableLifecycleMonitoring() did to stdin.
+ *
+ * It calls process.stdin.resume() to notice a terminal wrapper closing the pipe,
+ * and a resumed stdin is a live libuv handle — it keeps the event loop turning
+ * on its own. `--exit-after-initial-compile` returns from main() without calling
+ * process.exit(), so with stdin still flowing the process simply sat there after
+ * printing its result: the portable self-test and any CI diagnostic run hung
+ * until they were killed. Only --desktop escaped it, because that mode never
+ * resumes stdin in the first place.
+ */
+function releaseStdin(): void {
+  try {
+    process.stdin.pause();
+    process.stdin.unref();
+  } catch { /* stdin may already be closed */ }
+}
+
 let shutdownRun: Promise<void> | null = null;
 function shutdown(why: string): Promise<void> {
   shutdownRun ??= (async () => {
     console.log(`\n[TeXChronicle] stopping (${why})…`);
     if (launcherWatch) clearInterval(launcherWatch);
     launcherWatch = null;
+    releaseStdin();
     await stopWatching().catch(() => {});
     await shutdownEngine().catch(() => {});
     await ownedInstance?.release().catch(() => {});
