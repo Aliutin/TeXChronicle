@@ -307,7 +307,10 @@ export function maskLatexFalseBlocks(source: string): string {
 export function maskBeamerOverlays(source: string): string {
   const chars = source.split('');
   const scan = maskLatexLiteralRegions(source);
-  const overlay = /\\(?:item|only|uncover|visible|invisible|onslide|alt|temporal|alert|action|pause)\*?\s*<[^>\r\n]*>/g;
+  // Deliberately not `\s*`: an overlay selector sits on the same line as its
+  // command. Allowing a newline between them let `\item` on one line and a `<`
+  // on the next blank out real prose.
+  const overlay = /\\(?:item|only|uncover|visible|invisible|onslide|alt|temporal|alert|action|pause)\*?[^\S\r\n]*<[^>\r\n]*>/g;
   for (let match = overlay.exec(scan); match; match = overlay.exec(scan)) {
     const open = match[0].indexOf('<');
     if (open < 0) continue;
@@ -502,6 +505,27 @@ function findCommand(text: string, name: string, from = 0): Macro | null {
   return null;
 }
 
+const SUBFLOAT = 'subfigure|subtable|subfloat|subcaptionblock';
+
+/** The caption belonging to the float itself, not to a panel inside it.
+ * Sub-captions come first in the source, so taking the first `\caption` labelled
+ * a two-panel figure with "Left panel shows A" and hid the real caption. */
+function findFloatCaption(text: string): Macro | null {
+  const token = new RegExp(`\\\\(?:(begin)|(end))\\s*\\{(?:${SUBFLOAT}|minipage|wrapfigure)\\*?\\}|\\\\caption(?![A-Za-z])`, 'g');
+  let depth = 0;
+  let outermost: Macro | null = null;
+  let first: Macro | null = null;
+  for (let found = token.exec(text); found; found = token.exec(text)) {
+    if (found[1]) { depth++; continue; }
+    if (found[2]) { depth = Math.max(0, depth - 1); continue; }
+    const macro = readMacro(text, found.index);
+    if (!macro) continue;
+    first ??= macro;
+    if (depth === 0) outermost = macro;
+  }
+  return outermost ?? first;
+}
+
 function visibleTypographyProjection(value: string, absoluteStart = 0): { text: string; boundaries: number[] } {
   let text = '';
   const boundaries = [absoluteStart];
@@ -545,7 +569,14 @@ function appendTextNode(nodes: InlineNode[], node: Extract<InlineNode, { type: '
     previous.text += node.text;
     previous.source.to = node.source.to;
     previous.source.raw += node.source.raw;
-    previous.source.boundaries.push(...node.source.boundaries.slice(1));
+    // Appended one at a time, deliberately. `push(...boundaries)` spreads every
+    // boundary into an argument list, and a paragraph of 125k plain characters
+    // following an atomic node (`\%`, `\&`, `\'{e}`) is enough arguments to
+    // overflow the call stack — which killed the whole Live pane, Retry
+    // included, on nothing more exotic than a long paragraph.
+    for (let index = 1; index < node.source.boundaries.length; index++) {
+      previous.source.boundaries.push(node.source.boundaries[index]);
+    }
     return;
   }
   nodes.push(node);
@@ -587,6 +618,27 @@ function lastUsedEnd(macro: Macro, argCount: number): number {
   if (argCount > 0 && macro.args[argCount - 1]) return macro.args[argCount - 1].end;
   if (macro.options.length) return macro.options[macro.options.length - 1].end;
   return macro.headEnd;
+}
+
+/** The optional argument of a break macro (`\\[2pt]`, `\pagebreak[4]`) is a
+ * length or a penalty, never prose — but only when the bracket touches the
+ * macro and actually closes. `\noindent [1] Smith et al.` opens a reference
+ * entry, and `readGroup` answers an unmatched `[` with a group running to the
+ * end of the document, so consuming one on trust loses the rest of the paper. */
+const BREAK_WITH_LENGTH = new Set(['pagebreak', 'nopagebreak', 'linebreak', '\\']);
+
+/** Whether a group really ended, as opposed to `readGroup` reaching the end of
+ * the source looking for a delimiter that was never there. Skipping over an
+ * unterminated group discards everything after it. */
+function closedGroup(text: string, group: Group): boolean {
+  return text[group.end - 1] === (text[group.start] === '{' ? '}' : ']');
+}
+
+function breakLengthEnd(macro: Macro, text: string): number {
+  if (!BREAK_WITH_LENGTH.has(macro.name)) return macro.headEnd;
+  const option = macro.options[0];
+  if (!option || option.start !== macro.headEnd || !closedGroup(text, option)) return macro.headEnd;
+  return option.end;
 }
 
 export function parseInline(text: string, context: ParseContext): InlineNode[] {
@@ -666,7 +718,7 @@ export function parseInline(text: string, context: ParseContext): InlineNode[] {
 
     if (macro.name === '\\') {
       nodes.push({ type: 'break' });
-      i = macro.headEnd;
+      i = breakLengthEnd(macro, text);
       continue;
     }
     if (['%', '&', '_', '#', '$', '{', '}'].includes(macro.name)) {
@@ -763,23 +815,37 @@ export function parseInline(text: string, context: ParseContext): InlineNode[] {
     }
     if (LAYOUT_ONLY.has(macro.name)) {
       if (macro.name === 'par' || macro.name === 'linebreak') nodes.push({ type: 'break' });
-      i = macro.options[macro.options.length - 1]?.end ?? macro.headEnd;
+      i = breakLengthEnd(macro, text);
       continue;
     }
     if (DROP_WITH_ARGS.has(macro.name)) {
-      i = macro.args[macro.args.length - 1]?.end ?? macro.options[macro.options.length - 1]?.end ?? macro.headEnd;
+      // Half-typed source is normal. Skipping past an argument that never closes
+      // (`\vspace{1em Prose…`) would drop every remaining paragraph, so stop at
+      // the last argument that really ended.
+      let end = macro.headEnd;
+      for (const argument of macro.args) {
+        if (!closedGroup(text, argument)) break;
+        end = argument.end;
+      }
+      i = end;
       continue;
     }
 
     // Project-local presentation macros commonly take style/configuration
     // arguments first and visible content last (for example \pill{blue}{Text}).
     // Preserving the last argument gives a useful tolerant rendering without
-    // inventing project-specific command definitions.
-    const visibleArgument = macro.args[macro.args.length - 1];
-    if (visibleArgument) {
+    // inventing project-specific command definitions. A last argument that
+    // renders to nothing is a unit or a key rather than content — \SI{5}{\metre}
+    // would otherwise show nothing at all — so fall back to the nearest earlier
+    // argument that does show something.
+    if (macro.args.length) {
       context.approximated.add(`\\${macro.name}`);
-      nodes.push(...childrenFor(visibleArgument, context));
-      i = visibleArgument.end;
+      let children = childrenFor(macro.args[macro.args.length - 1], context);
+      for (let back = macro.args.length - 2; back >= 0 && !previewPlainText(children); back--) {
+        children = childrenFor(macro.args[back], context);
+      }
+      nodes.push(...children);
+      i = macro.args[macro.args.length - 1].end;
       continue;
     }
 
@@ -807,6 +873,18 @@ export interface PreviewTextChange {
   to: number;
   insert: string;
   expected: string;
+}
+
+/** True when the source the preview expected differs from the file only where
+ * masking blanked it to spaces — a `%` comment, an `\iffalse` branch, a Beamer
+ * overlay. Such a span can never be spliced from Live, so the message it earns
+ * has to say where to go instead of inviting a retry that cannot succeed. */
+export function differsOnlyByMasking(expected: string, actual: string): boolean {
+  if (expected.length !== actual.length || expected === actual) return false;
+  for (let index = 0; index < expected.length; index++) {
+    if (expected[index] !== actual[index] && expected[index] !== ' ') return false;
+  }
+  return true;
 }
 
 /** Escape text typed in the visual surface without interpreting it as LaTeX. */
@@ -988,16 +1066,22 @@ function letterNumber(value: number): string {
 
 /** Parse a complete .tex document or a standalone included section. Never throws. */
 export function parseLatexPreview(source: string): PreviewDocument {
-  const masked = maskBeamerOverlays(maskLatexFalseBlocks(maskLatexComments(source)));
+  const plain = maskLatexFalseBlocks(maskLatexComments(source));
+  const beamerClass = /\\documentclass\s*(?:\[([^\]]*)\]\s*)?\{beamer\}/.exec(plain);
+  // A `\begin{frame}` quoted inside verbatim or lstlisting is documentation
+  // about Beamer, not a slide; an article that shows one must stay an article.
+  const kind: PreviewDocument['kind'] = beamerClass || /\\begin\s*\{frame\}/.test(maskLatexLiteralRegions(plain))
+    ? 'presentation'
+    : 'article';
+  // Overlay masking is Beamer syntax and belongs to decks only. In an ordinary
+  // paper `<expr> ::= …` is BNF and `\alert<x>` is prose about a macro; blanking
+  // either one deletes the author's own words.
+  const masked = kind === 'presentation' ? maskBeamerOverlays(plain) : plain;
   const footnotes: PreviewFootnote[] = [];
   const approximated = new Set<string>();
   const references: Record<string, PreviewReference> = {};
   const baseContext: ParseContext = { footnotes, approximated, line: 1, offset: undefined };
   const metadata = titleMetadata(masked, baseContext);
-  const beamerClass = /\\documentclass\s*(?:\[([^\]]*)\]\s*)?\{beamer\}/.exec(masked);
-  const kind: PreviewDocument['kind'] = beamerClass || /\\begin\s*\{frame\}/.test(masked)
-    ? 'presentation'
-    : 'article';
   const aspectRatio: PreviewDocument['aspectRatio'] = /(?:^|,)\s*aspectratio\s*=\s*169\s*(?:,|$)/.test(beamerClass?.[1] ?? '')
     ? '16:9'
     : '4:3';
@@ -1037,6 +1121,22 @@ export function parseLatexPreview(source: string): PreviewDocument {
 
   const register = (raw: string, number: string, kind: PreviewReference['kind']) => {
     for (const key of labelsIn(raw)) references[key] = { number, kind };
+  };
+  // Panels carry their own labels. Run after `register`, which claims every
+  // label in the float: `\ref` to a subfigure should read 1a, not 1 like the
+  // figure that contains it.
+  const registerPanels = (raw: string, number: string, kind: PreviewReference['kind']) => {
+    const opening = new RegExp(`\\\\begin\\s*\\{(?:${SUBFLOAT})\\*?\\}`, 'g');
+    let panel = 0;
+    for (let found = opening.exec(raw); found; found = opening.exec(raw)) {
+      const inner = environmentAt(raw, found.index);
+      if (!inner) continue;
+      const letter = String.fromCharCode(97 + panel++);
+      for (const key of labelsIn(raw.slice(inner.innerStart, inner.endStart))) {
+        references[key] = { number: `${number}${letter}`, kind };
+      }
+      opening.lastIndex = Math.max(opening.lastIndex, inner.end);
+    }
   };
   const addParagraph = (raw: string, line: number, align?: 'center', offset?: number) => {
     const content = parseTrimmedInline(raw, offset, baseContext, line);
@@ -1231,9 +1331,10 @@ export function parseLatexPreview(source: string): PreviewDocument {
 
     if (lower === 'figure' || lower === 'figure*') {
       const number = String(++figure);
-      const caption = findCommand(raw, 'caption');
+      const caption = findFloatCaption(raw);
       const assets = [...raw.matchAll(/\\includegraphics\s*(?:\[[^\]]*\]\s*)?\{([^{}]+)\}/g)].map((match) => match[1].trim());
       register(raw, number, 'figure');
+      registerPanels(raw, number, 'figure');
       return [{
         type: 'figure', line, number, assets,
         caption: caption?.args[0] ? parseInline(caption.args[0].value, {
@@ -1246,8 +1347,9 @@ export function parseLatexPreview(source: string): PreviewDocument {
 
     if (lower === 'table' || lower === 'table*') {
       const number = String(++table);
-      const caption = findCommand(raw, 'caption');
+      const caption = findFloatCaption(raw);
       register(raw, number, 'table');
+      registerPanels(raw, number, 'table');
       const tabularMatch = /\\begin\s*\{(tabular\*?|tabularx|longtable)\}/.exec(raw);
       const rows: PreviewTableRow[] = [];
       if (tabularMatch) {
@@ -1308,7 +1410,10 @@ export function parseLatexPreview(source: string): PreviewDocument {
         let label: InlineNode[] | undefined;
         if (raw[start] === '[') {
           const group = readGroup(raw, start);
-          if (group) {
+          // Only a bracket that closes is a description label. `\item [0,1) is
+          // the range` is prose, and treating its `[` as a label consumed the
+          // rest of the list — the item then had no content and vanished.
+          if (group && closedGroup(raw, group)) {
             label = parseInline(group.value, {
               ...baseContext,
               line: lineOf(environment.innerStart + start),
@@ -1335,6 +1440,10 @@ export function parseLatexPreview(source: string): PreviewDocument {
     if (lower === 'verbatim' || lower === 'lstlisting' || lower === 'minted') {
       return [{ type: 'code', line, content: raw.trim(), language: lower === 'minted' ? 'code' : undefined }];
     }
+    // `comment` is the package spelling of `\iffalse`: parked text that the PDF
+    // never shows. Live showed it as ordinary editable prose, so a draft
+    // paragraph the author had deliberately shelved reappeared in the paper.
+    if (lower === 'comment') return [];
     if (lower === 'tikzpicture' || lower === 'picture') {
       approximated.add(`environment ${name}`);
       return [{ type: 'notice', line, label: 'Diagram', detail: 'Rendered in the exact PDF view' }];
@@ -1350,9 +1459,14 @@ export function parseLatexPreview(source: string): PreviewDocument {
     return paragraphParts(raw, environment.innerStart, baseContext, lineOf);
   };
 
+  // An image on a line of its own is a block. An image with a sentence beside it
+  // — `\includegraphics{logo} is our logo, and…` — is part of that sentence, and
+  // breaking the paragraph there used to drop the rest of the line from Live.
+  const imageOnlyLine = /^(?:\\includegraphics\s*(?:\[[^\]]*\]\s*)?\{[^{}]*\}\s*)+$/;
   const isBlockStart = (trimmed: string): boolean =>
     /^\\(?:section|subsection|subsubsection|paragraph)\*?\b/.test(trimmed) ||
-    /^\\begin\s*\{/.test(trimmed) || /^\\(?:maketitle|appendix|input|include|includegraphics|bibliography)\b/.test(trimmed) ||
+    /^\\begin\s*\{/.test(trimmed) || /^\\(?:maketitle|appendix|input|include|bibliography)\b/.test(trimmed) ||
+    imageOnlyLine.test(trimmed) ||
     /^\\(?:title|author|date|thanks)\b/.test(trimmed) || trimmed.startsWith('\\[') || trimmed.startsWith('$$');
 
   for (let i = 0; i < lines.length;) {
@@ -1438,6 +1552,13 @@ export function parseLatexPreview(source: string): PreviewDocument {
       }
       if (assets.length) blocks.push({ type: 'image', line: sourceLine.number, assets });
       i = Math.max(i + 1, firstLineAtOrAfter(searchAt));
+      // An image is often introduced by the sentence sharing its line. That tail
+      // is prose and belongs in Live; without this it was simply never rendered.
+      const tailEnd = lines[i - 1]?.end ?? sourceLine.end;
+      if (searchAt < tailEnd) {
+        const tail = masked.slice(searchAt, tailEnd);
+        if (tail.trim()) addParagraph(tail, lineOf(searchAt), undefined, searchAt);
+      }
       continue;
     }
 

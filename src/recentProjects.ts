@@ -87,8 +87,12 @@ const keyOf = (item: Pick<RecentProject, 'projectRoot' | 'mainFile'>): string =>
 const RECENT_LOCK_STALE_MS = 30_000;
 const RECENT_LOCK_TIMEOUT_MS = 10_000;
 
+/** Is that process still running? EPERM means yes — the process exists and this
+ *  one may not signal it (another user's, or an elevated one). Treating that as
+ *  dead broke a live lock and let two processes rewrite this file at once. */
 function isAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch { return false; }
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
 }
 
 async function withRecentLock<T>(path: string, fn: () => Promise<T>): Promise<T> {

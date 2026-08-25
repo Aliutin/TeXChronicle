@@ -14,6 +14,7 @@ import {
 import katex from 'katex';
 import {
   contentEditableParagraphDraft,
+  differsOnlyByMasking,
   expandLatexIncludes,
   parseLatexPreview,
   previewTextChange,
@@ -43,8 +44,16 @@ interface EditingContextValue {
   canEdit: (source: PreviewTextSource) => boolean;
   resolve: (change: PreviewTextChange) => LiveSourceEdit | null;
   apply: (edit: LiveSourceEdit) => boolean;
+  /** Whether the span the edit covers reaches into masked source. */
+  bordersHiddenSource: (change: PreviewTextChange) => boolean;
   fail: (message: string) => void;
 }
+
+/** A genuinely stale preview: reparsing and retyping does fix it. */
+const EDIT_STALE_MESSAGE = 'That text no longer matches the source. The preview was refreshed; please retry the edit.';
+/** Not stale — structurally impossible here. Retrying could never have worked,
+ * so the old message sent people round the same loop until they gave up. */
+const EDIT_HIDDEN_MESSAGE = "This text borders hidden source (a % comment, \\iffalse block, or overlay) and can't be edited here — edit it in Code.";
 
 const EditingContext = createContext<EditingContextValue | null>(null);
 
@@ -189,7 +198,7 @@ function EditableText({ node }: { node: Extract<InlineNode, { type: 'text' }> })
     lastCommitted.current = node.text;
     structuralDraft.current = false;
     if (ref.current) ref.current.textContent = node.text;
-    editing.fail('That text no longer matches the source. The preview was refreshed; please retry the edit.');
+    editing.fail(change && editing.bordersHiddenSource(change) ? EDIT_HIDDEN_MESSAGE : EDIT_STALE_MESSAGE);
   }, [editing, node.source, node.text]);
 
   const schedule = useCallback((value: string) => {
@@ -507,6 +516,7 @@ export function LivePreview({ source, file, refreshKey = 0, onEdit, onTextEdit, 
       if (applied) setEditProblem(null);
       return applied;
     },
+    bordersHiddenSource: (change) => differsOnlyByMasking(change.expected, expanded.text.slice(change.from, change.to)),
     fail: setEditProblem,
   }), [expanded, file, onTextEdit, starts]);
 
@@ -521,7 +531,11 @@ export function LivePreview({ source, file, refreshKey = 0, onEdit, onTextEdit, 
             {document.approximated.length} construct{document.approximated.length === 1 ? '' : 's'} approximated
           </span>
         )}
-        {editProblem && <span className="live-edit-problem" title={editProblem}>edit refreshed — retry</span>}
+        {editProblem && (
+          <span className="live-edit-problem" title={editProblem}>
+            {editProblem === EDIT_HIDDEN_MESSAGE ? 'hidden source — edit in Code' : 'edit refreshed — retry'}
+          </span>
+        )}
         <span className="spacer" />
         <span className="live-exact-note">{document.kind === 'presentation' ? 'All overlays combined · click prose to edit · PDF is exact' : 'Click prose to edit · protected items keep exact LaTeX · PDF is exact'}</span>
       </div>

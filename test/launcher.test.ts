@@ -24,6 +24,32 @@ test('an explicit project keeps a nested main file relative to that root', () =>
   assert.equal(target.mainFile, 'draft/main.tex');
 });
 
+// The function takes a cwd because the caller's directory and the process's can
+// differ — the desktop picker passes the folder it was opened in. A relative
+// --project used to ignore that argument and resolve against process.cwd(), so
+// `texchronicle preview -p . main.tex` run from the paper landed on whatever
+// directory the process had been started in.
+test('a relative --project resolves against the caller cwd, not the process cwd', () => {
+  const cwd = resolve('launcher-fixtures/papers/study');
+  const target = resolveLaunchTarget(cwd, '.', 'draft/main.tex');
+  assert.equal(target.projectRoot, cwd);
+  assert.equal(target.mainFile, 'draft/main.tex');
+  assert.notEqual(target.projectRoot, resolve('.'), 'process.cwd() must not leak in');
+});
+
+test('a relative --project pointing at a sibling resolves under the caller cwd', () => {
+  const cwd = resolve('launcher-fixtures/papers');
+  const target = resolveLaunchTarget(cwd, 'study', 'main.tex');
+  assert.equal(target.projectRoot, resolve('launcher-fixtures/papers/study'));
+  assert.equal(target.mainFile, 'main.tex');
+});
+
+test('an absolute --project is still taken as given', () => {
+  const root = resolve('launcher-fixtures/papers/study');
+  const target = resolveLaunchTarget(resolve('launcher-fixtures/unrelated'), root, 'main.tex');
+  assert.equal(target.projectRoot, root);
+});
+
 test('a main file outside an explicit project is rejected', () => {
   assert.throws(
     () => resolveLaunchTarget(resolve('launcher-fixtures/x'), resolve('launcher-fixtures/papers/a'), resolve('launcher-fixtures/papers/b/main.tex')),

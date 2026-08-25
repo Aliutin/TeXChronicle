@@ -7,7 +7,7 @@
 // globs silently watches nothing). So we watch the project directory itself and
 // filter events by extension in the handler.
 import chokidar, { type FSWatcher } from 'chokidar';
-import { basename } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { requestCompile } from '../coordinator.js';
 
 const WATCH_EXT = /\.(tex|bib|cls|sty|bst|cfg|clo|def|ldf|fd|bbx|cbx|lbx|png|jpe?g|pdf|eps|svg)$/i;
@@ -15,7 +15,12 @@ const IGNORED_DIRS = new Set(['.git', 'node_modules', '.latex-preview', '.vscode
 const DEBOUNCE_MS = 400;
 
 let watcher: FSWatcher | null = null;
+let watchedRoot: string | null = null;
 let timer: NodeJS.Timeout | null = null;
+
+// Windows paths differ in case without differing in identity; POSIX ones don't.
+const sameRoot = (a: string, b: string) =>
+  process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
 
 // Paths the server just wrote itself (built-in editor saves). We skip the change
 // event they cause so an in-app save can choose whether to recompile — external
@@ -28,10 +33,32 @@ export function suppressNextChange(absPath: string): void {
   suppressed.set(normPath(absPath), Date.now());
 }
 
-/** Start watching `projectRoot` (idempotent — only the first call takes effect). */
+/**
+ * Start watching `projectRoot`. Idempotent for the root already being watched;
+ * a DIFFERENT root re-targets.
+ *
+ * It used to be idempotent full stop — `if (watcher) return` — which pinned the
+ * watcher to whatever directory the first render_preview happened to run in for
+ * the whole life of the process. Pointed at the wrong root once (a client that
+ * spawns its servers from your home directory), it stayed there: recursively
+ * polling a home folder on Windows, and never watching the paper.
+ */
 export function startWatching(projectRoot: string): void {
-  if (watcher) return;
-  watcher = chokidar.watch(projectRoot, {
+  const root = resolve(projectRoot);
+  if (watcher && watchedRoot && sameRoot(watchedRoot, root)) return;
+  if (watcher) {
+    // Drop the old watcher without making this function async: no caller awaits
+    // it, so closing in the background keeps the change local to this file. The
+    // new watcher is built immediately, so no save can slip through unwatched.
+    const previous = watcher;
+    watcher = null;
+    if (timer) clearTimeout(timer);
+    timer = null;
+    suppressed.clear();
+    void previous.close().catch(() => {});
+  }
+  watchedRoot = root;
+  watcher = chokidar.watch(root, {
     // Function form (v4-safe): prune ignored directories from the walk entirely.
     ignored: (path, stats) => {
       const name = basename(path);
@@ -75,4 +102,9 @@ export async function stopWatching(): Promise<void> {
   suppressed.clear();
   await watcher?.close();
   watcher = null;
+  watchedRoot = null;
 }
+
+/** The directory currently being watched, or null. Exported for the tests that
+ *  check a wrong project root never starts a watcher at all. */
+export function watchingRoot(): string | null { return watchedRoot; }

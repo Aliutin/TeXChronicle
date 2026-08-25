@@ -109,7 +109,9 @@ or drag that file onto `TeXChronicle.exe`.
 This is a portable folder, not an installer: keep its subfolders beside the EXE.
 The paper's checkpoints, comments, and saved render PDFs remain in the paper's
 `.latex-preview` directory, so Dropbox or another ordinary folder synchronizer
-carries them across machines. See [the portable Windows guide](docs/PORTABLE-WINDOWS.md)
+carries them across machines. One machine at a time: let the sync finish before
+opening the same paper elsewhere; two machines editing the same paper offline can
+fork its checkpoint history. See [the portable Windows guide](docs/PORTABLE-WINDOWS.md)
 for sharing, checksums, updates, limitations, and the reproducible build command.
 
 ### One-click launcher (Windows)
@@ -134,8 +136,12 @@ From a source checkout, install and link TeXChronicle once:
 
 ```bash
 npm install
+npm run build:ui
 npm link
 ```
+
+`npm run build:ui` builds the browser workspace. Without it a fresh clone falls
+back to the basic viewer — a PDF pane with no editor, History, or comments.
 
 Then run it from any LaTeX project directory:
 
@@ -156,30 +162,75 @@ open or use it.
 ## Setup with an LLM/MCP client
 
 The package and MCP metadata now use `texchronicle` and
-`io.github.Aliutin/texchronicle`. Until the renamed package and repository are
-published, configure an MCP client from this source checkout:
+`io.github.Aliutin/texchronicle`. Neither the npm package nor the renamed GitHub
+repository is published yet — `npm view texchronicle` is a 404 and
+`github.com/Aliutin/TeXChronicle` is "Repository not found" — so an MCP client
+has to be pointed at this source checkout:
 
-1. **Add it to your paper project's `.mcp.json`** (see [`.mcp.json.example`](.mcp.json.example)):
+1. **Prepare the checkout** (once, in the TeXChronicle folder):
+
+   ```bash
+   npm install
+   npx --no-install playwright install chromium --only-shell
+   npm run build:ui
+   ```
+
+   `npm install` does *not* download a browser — Playwright has no postinstall
+   hook — and it does not build the workspace UI either. Skip the second command
+   and the first diff or WASM compile fails; skip the third and the preview opens
+   the basic viewer instead of the workspace.
+
+2. **Add it to your paper project's `.mcp.json`** (see [`.mcp.json.example`](.mcp.json.example)):
 
    ```json
    {
      "mcpServers": {
        "texchronicle": {
-         "command": "npx",
-         "args": ["tsx", "/absolute/path/to/TeXChronicle/src/server.ts"]
+         "command": "node",
+         "args": ["/absolute/path/to/TeXChronicle/bin/cli.mjs"]
        }
      }
    }
    ```
 
+   Go through `bin/cli.mjs` rather than `npx tsx src/server.ts`: the entry script
+   is what checks your Node version and says so in plain words when it is too
+   old, and what preloads the `os.userInfo` fallback some Windows accounts need.
+   Called directly, `src/server.ts` skips both and fails in ways an MCP client
+   reports only as `-32000`.
+
    After an npm release, the shorter command will be
    `"command": "npx", "args": ["-y", "texchronicle"]`.
 
-2. **Restart Claude Code** (or `/mcp` reconnect) so it picks up the server.
+3. **Restart Claude Code** (or `/mcp` reconnect) so it picks up the server.
 
-3. **Ask Claude to render.** e.g. *"render a preview of this paper"* → the first call
+4. **Ask Claude to render.** e.g. *"render a preview of this paper"* → the first call
    downloads the WASM TeX Live assets (~650 MB, one time), compiles, and opens the
    live preview tab. Subsequent edits reload it automatically.
+
+### Which folder does it use?
+
+The one the server was started in. Claude Code and Codex start an MCP server in
+the project directory, so a `.mcp.json` sitting next to your paper needs nothing
+further. Some clients — Claude Desktop among them — start their servers from your
+home directory instead, and there the server has no paper to compile. Name the
+folder explicitly in that case, either in the server's config entry:
+
+```json
+{
+  "mcpServers": {
+    "texchronicle": {
+      "command": "node",
+      "args": ["/absolute/path/to/TeXChronicle/bin/cli.mjs"],
+      "env": { "TEXCHRONICLE_PROJECT": "/absolute/path/to/paper" }
+    }
+  }
+}
+```
+
+or as a server argument: `"args": ["/abs/path/to/TeXChronicle/bin/cli.mjs", "--project", "/abs/path/to/paper"]`.
+A server started somewhere that holds no `.tex` file says so and stops, rather
+than watching that folder or creating a history store in it.
 
 The WASM assets are **not** in this repo. They're fetched on first run into a
 per-user cache — `~/Library/Caches/texchronicle` on macOS, `$XDG_CACHE_HOME/texchronicle`
@@ -232,9 +283,11 @@ single step by typing the tool name. The rule to teach: *the tool is `X` → typ
 You never *have* to type these — plain English works too (*"render a preview"*,
 *"address my comments"*). The commands are just a fast, teachable shorthand.
 
-> The plugin bundles the MCP server (`npx texchronicle`), so installing the plugin is
-> all you need — the `.mcp.json` above is the alternative if you'd rather not install
-> a plugin. The slash commands work either way.
+> The slash commands come with the plugin: they are files in `commands/`, which
+> only the plugin installs. The server itself registers no prompts, so a
+> `.mcp.json` setup gives you the tools in the table below but no `/` shortcuts —
+> you drive them in plain English instead (*"render a preview"*, *"address my
+> comments"*), which is what the commands expand to anyway.
 
 ## Tools
 
@@ -352,8 +405,10 @@ portable release carries these runtimes itself and needs only 64-bit Windows 10
 or later plus a normal web browser for the workspace window.
 
 - Node 20.19+ (the floor `chokidar` and `playwright` actually need; the server checks at startup and says so)
-- Playwright's Chromium (installed automatically; ~150–300 MB) — or set it to reuse
-  your installed Chrome.
+- Playwright's Chromium (~150–300 MB). It is **not** installed automatically —
+  Playwright ships no postinstall hook — so run
+  `npx --no-install playwright install chromium --only-shell` in the TeXChronicle
+  folder once, or set it to reuse your installed Chrome.
 - ~650 MB disk for the one-time WASM TeX Live assets — all of it fetched on the
   first run, in three package sets (basic 87 MB, recommended 190 MB, extra 324 MB,
   plus the 31 MB engine). A normal paper only *loads* the basic set; the larger two

@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync, utimesSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, utimesSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { historyRepo, forgetHistoryRepo } from '../src/git/historyRepo.js';
+import { createCheckpoint } from '../src/git/checkpoints.js';
 
 // The distinction these tests exist for: "no git" and "couldn't create the
 // history store" are different problems with different answers, and they were a
@@ -133,5 +135,63 @@ test('a project nested inside a larger git repo gets its own portable history', 
   } finally {
     forgetHistoryRepo();
     rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test('the checkpoint refs get a reflog, so a lost ref is still recoverable', async () => {
+  // Git's default (core.logAllRefUpdates=true) logs refs/heads, refs/remotes,
+  // refs/notes and HEAD — and every checkpoint lives under refs/latex-preview,
+  // which is none of those. The whole timeline therefore hung from one 41-byte
+  // file with no record of where it used to point, in a directory people keep
+  // in Dropbox: one "conflicted copy" of that file and the old chain is
+  // unreferenced, gc-able, and gone. `always` logs every ref.
+  forgetHistoryRepo();
+  const dir = mkdtempSync(join(tmpdir(), 'hr-reflog-'));
+  try {
+    writeFileSync(join(dir, 'main.tex'), 'v1\n');
+    const repo = await historyRepo(dir);
+    assert.equal(repo.mode, 'shadow');
+    const env = { ...process.env, ...repo.env };
+    assert.equal(
+      execFileSync('git', ['config', 'core.logAllRefUpdates'], { cwd: dir, env, encoding: 'utf8' }).trim(),
+      'always',
+    );
+
+    await createCheckpoint(dir);
+    writeFileSync(join(dir, 'main.tex'), 'v2\n');
+    await createCheckpoint(dir);
+
+    // Not just the setting — the log has to actually exist and hold both moves.
+    const log = execFileSync('git', ['reflog', 'refs/latex-preview/checkpoints'], { cwd: dir, env, encoding: 'utf8' });
+    assert.ok(log.trim().length > 0, 'the checkpoint ref has no reflog');
+    assert.ok(existsSync(join(dir, '.latex-preview', 'history.git', 'logs', 'refs', 'latex-preview', 'checkpoints')));
+    const previous = execFileSync('git', ['rev-parse', 'refs/latex-preview/checkpoints@{1}'], { cwd: dir, env, encoding: 'utf8' }).trim();
+    assert.match(previous, /^[0-9a-f]{40,64}$/, 'the previous tip is not recoverable from the reflog');
+  } finally {
+    forgetHistoryRepo();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('per-run machine state is ignored, so it stays out of the author\'s git status', async () => {
+  // .latex-preview/.gitignore listed only history.git/ and renders/. The build
+  // scratch directories (build/<pid>-…) and this machine's instance record are
+  // newer, and without these lines they show up as untracked files in the
+  // author's own repository — noise they are then invited to commit.
+  forgetHistoryRepo();
+  const dir = mkdtempSync(join(tmpdir(), 'hr-ignore-'));
+  try {
+    writeFileSync(join(dir, 'main.tex'), '');
+    await historyRepo(dir);
+    const ignored = new Set(
+      readFileSync(join(dir, '.latex-preview', '.gitignore'), 'utf8')
+        .split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
+    );
+    for (const entry of ['history.git/', 'renders/', 'build/', 'instances/']) {
+      assert.ok(ignored.has(entry), `.latex-preview/.gitignore does not ignore ${entry}`);
+    }
+  } finally {
+    forgetHistoryRepo();
+    rmSync(dir, { recursive: true, force: true });
   }
 });

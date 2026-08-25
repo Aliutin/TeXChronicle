@@ -51,7 +51,9 @@ and the project is added there.
 
 Do not exclude `.latex-preview` from Dropbox if you want this history on every
 machine. TeXChronicle already prevents its internal history and render files from
-appearing as paper changes in the section diff.
+appearing as paper changes in the section diff. One machine at a time: let the
+sync finish before opening the same paper elsewhere; two machines editing the
+same paper offline can fork its checkpoint history.
 
 ## What is included
 

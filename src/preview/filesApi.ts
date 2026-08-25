@@ -2,8 +2,9 @@
 // Writes go straight to disk — the file watcher then recompiles and the WS
 // reload refreshes the PDF, so "save in the browser editor" reuses the exact
 // same live loop as any other edit (Claude's or an external editor's).
-import { readdir, readFile, writeFile, mkdir, rename, rm, stat, realpath } from 'node:fs/promises';
-import { dirname, join, normalize, posix, relative, resolve, sep } from 'node:path';
+import { readdir, readFile, writeFile, mkdir, rename, rm, stat, realpath, unlink } from 'node:fs/promises';
+import { basename, dirname, join, normalize, posix, relative, resolve, sep } from 'node:path';
+import { createHash, randomBytes } from 'node:crypto';
 import { gitOrNull } from '../git/exec.js';
 
 const TEXT_EXT = /\.(tex|bib|cls|sty|bst|cfg|clo|def|ldf|fd|bbx|cbx|lbx|txt|md)$/i;
@@ -19,6 +20,14 @@ const ASSET_EXTENSIONS = ['.pdf', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.eps
 const assetBoundaryCache = new Map<string, Promise<string>>();
 
 const toPosix = (p: string) => p.split(sep).join('/');
+
+/** Containment test for two already-resolved absolute paths. Case-folded on
+ *  Windows, where the same directory can differ only by case. */
+const samePathOrInside = (parent: string, child: string): boolean => {
+  const a = process.platform === 'win32' ? parent.toLowerCase() : parent;
+  const b = process.platform === 'win32' ? child.toLowerCase() : child;
+  return b === a || b.startsWith(a.endsWith(sep) ? a : a + sep);
+};
 
 export async function listTextFiles(root: string): Promise<string[]> {
   const out: string[] = [];
@@ -144,8 +153,49 @@ export async function deleteEntry(root: string, rel: string): Promise<void> {
   await rm(await guardPath(root, rel), { recursive: true, force: true });
 }
 
+/** Identifies the exact bytes a reader saw, so a later write can prove nothing
+ *  else changed them in between. */
+const etagOf = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex');
+
+export interface TextFileContent {
+  content: string;
+  /** sha256 of the bytes on disk. Sent as the ETag; echoed back as If-Match. */
+  etag: string;
+}
+
+/**
+ * Read a source file for the editor — or refuse, rather than corrupt it.
+ *
+ * `readFile(p,'utf8')` decodes leniently: every byte it cannot make sense of
+ * becomes U+FFFD. That is silent and it is one-way. A Latin-1 `.tex` (still
+ * ordinary in older papers — `\usepackage[latin1]{inputenc}`) opened fine, and
+ * the very next save, even one that changed nothing, wrote every é back as a
+ * replacement character. Measured: `e9` in, `ef bf bd` out. A UTF-16 file from
+ * Notepad lost its whole text the same way.
+ *
+ * A fatal decoder makes that impossible: a file we cannot round-trip is one we
+ * decline to open, with a message that says how to convert it and what still
+ * works meanwhile. `ignoreBOM` keeps a UTF-8 BOM in the string — dropping it
+ * here is what would make an untouched save rewrite the file's first bytes.
+ */
+export async function readTextFileWithEtag(root: string, rel: string): Promise<TextFileContent> {
+  const bytes = await readFile(await guard(root, rel));
+  let content: string;
+  try {
+    content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    throw new Error(
+      `${rel} is not UTF-8 (probably Latin-1 or UTF-16). TeXChronicle will not open it in the editor, ` +
+      "because saving would replace every non-UTF-8 character with '?'. " +
+      'Convert it first (e.g. iconv -f latin1 -t utf8), or keep editing it in your own editor — ' +
+      'compiling and history still work.',
+    );
+  }
+  return { content, etag: etagOf(bytes) };
+}
+
 export async function readTextFile(root: string, rel: string): Promise<string> {
-  return readFile(await guard(root, rel), 'utf8');
+  return (await readTextFileWithEtag(root, rel)).content;
 }
 
 export interface ResolvedAssetFile { fullPath: string; relativePath: string }
@@ -244,12 +294,33 @@ export async function resolveIncludeFile(root: string, rel: string): Promise<Res
   return { fullPath: guarded, relativePath: projectRelative, editable };
 }
 
+/**
+ * How far outside the boundary a TeX reference may reach: one directory, and
+ * nothing at a filesystem root.
+ *
+ * The escape exists for one real shape — `paper/draft` including
+ * `../figures/map.pdf`, artwork the author keeps beside the draft — and the
+ * "the source names it, so it is allowed" rule was written for that. But
+ * "names it" is not a boundary: `\graphicspath{{../../}}` in a downloaded
+ * template, or an absolute path left in a .tex by a collaborator, made
+ * /api/asset serve any .png/.pdf/.svg anywhere on the disk, and any .tex in the
+ * project can name one. A cap turns the rule back into what it was meant to be.
+ *
+ * At `C:\` or `/` there is no "one directory up" worth having — the parent is
+ * the whole volume — so those projects simply do not get the escape.
+ */
+function assetEscapeLimit(boundaryAbs: string): string | null {
+  const parent = normalize(resolve(boundaryAbs, '..'));
+  return parent === boundaryAbs || dirname(parent) === parent ? null : parent;
+}
+
 /** Resolve an image/PDF for browser display using the same ordinary search
  * locations as graphicx: the compiler directory, the including source's
  * directory, and every literal directory declared by \graphicspath. A literal
- * includegraphics reference may point beyond the normal project/Git boundary;
- * that exact read-only asset is allowed because the selected TeX source already
- * names it. Unreferenced browser paths retain the strict boundary. */
+ * includegraphics reference may point one directory beyond the normal
+ * project/Git boundary; that exact read-only asset is allowed because the
+ * selected TeX source already names it. Unreferenced browser paths retain the
+ * strict boundary, and an absolute reference never earns the escape at all. */
 export async function resolveAssetFile(root: string, rel: string, from?: string): Promise<ResolvedAssetFile> {
   const raw = String(rel).trim().replace(/\\/g, '/');
   if (!raw) throw new Error('invalid path');
@@ -258,11 +329,14 @@ export async function resolveAssetFile(root: string, rel: string, from?: string)
   const boundary = await assetBoundary(root);
   const boundaryAbs = normalize(resolve(boundary));
   const rootAbs = normalize(resolve(root));
+  const escapeLimit = assetEscapeLimit(boundaryAbs);
+  const withinEscapeLimit = (absolute: string): boolean =>
+    escapeLimit !== null && samePathOrInside(escapeLimit, absolute);
   const bases: Array<{ absolute: string; outsideAllowed: boolean }> = [];
   const addAbsolute = (absolutePath: string, outsideAllowed = false): void => {
     const absolute = normalize(resolve(absolutePath));
     const insideBoundary = absolute === boundaryAbs || absolute.startsWith(boundaryAbs + sep);
-    if (!insideBoundary && !outsideAllowed) return;
+    if (!insideBoundary && !(outsideAllowed && withinEscapeLimit(absolute))) return;
     const existing = bases.find((base) => base.absolute === absolute);
     if (existing) {
       existing.outsideAllowed ||= outsideAllowed;
@@ -294,7 +368,12 @@ export async function resolveAssetFile(root: string, rel: string, from?: string)
       const explicitlyReferenced = declared.references.has(texPathKey(raw));
 
       if (rawIsAbsolute) {
-        addAbsolute(raw, explicitlyReferenced);
+        // An absolute path in a .tex is served only when it lands inside the
+        // boundary anyway — being named by the source buys it nothing. There is
+        // no legitimate reading of "C:/Users/someone/private.png" that the
+        // browser needs from us, and treating it as authorised is how a single
+        // line in a shared template became read-anything.
+        addAbsolute(raw, false);
       } else {
         addAbsolute(resolve(dirname(sourceFull), raw), explicitlyReferenced);
         for (const graphicsDir of declared.directories) {
@@ -327,14 +406,29 @@ export async function resolveAssetFile(root: string, rel: string, from?: string)
     }
   }
 
+  // Resolved lazily and once: the limit is only needed when something actually
+  // reaches outside, and realpath costs a syscall.
+  let realEscapeLimit: string | undefined;
+  const escapesThroughSymlink = async (fullPath: string): Promise<boolean> => {
+    if (escapeLimit === null) return true;
+    if (realEscapeLimit === undefined) {
+      realEscapeLimit = normalize(await realpath(escapeLimit).catch(() => escapeLimit));
+    }
+    return !samePathOrInside(realEscapeLimit, fullPath);
+  };
+
   for (const candidate of candidates) {
     const insideBoundary = candidate.absolute !== boundaryAbs && candidate.absolute.startsWith(boundaryAbs + sep);
     try {
-      const fullPath = insideBoundary
-        ? await guardPath(boundaryAbs, toPosix(relative(boundaryAbs, candidate.absolute)))
-        : candidate.outsideAllowed
-          ? normalize(await realpath(candidate.absolute))
-          : null;
+      let fullPath: string | null = null;
+      if (insideBoundary) {
+        fullPath = await guardPath(boundaryAbs, toPosix(relative(boundaryAbs, candidate.absolute)));
+      } else if (candidate.outsideAllowed) {
+        // The lexical cap above confined the string; a symlink is the same
+        // escape by another route, so the resolved path has to answer too.
+        const real = normalize(await realpath(candidate.absolute));
+        fullPath = await escapesThroughSymlink(real) ? null : real;
+      }
       if (!fullPath) continue;
       const info = await stat(fullPath);
       if (info.isFile()) return { fullPath, relativePath: toPosix(relative(rootAbs, fullPath)) };
@@ -345,9 +439,84 @@ export async function resolveAssetFile(root: string, rel: string, from?: string)
   throw new Error('asset not found');
 }
 
-export async function writeTextFile(root: string, rel: string, content: string): Promise<void> {
+/** The write was refused because the file is no longer what the editor loaded.
+ *  Its message is the HTTP body verbatim; the route maps it to 409. */
+export class FileChangedOnDiskError extends Error {
+  constructor() {
+    super('file changed on disk');
+    this.name = 'FileChangedOnDiskError';
+  }
+}
+
+export interface WriteTextOptions {
+  /** An ETag the caller believes is still current. When given, the write
+   *  happens only if the bytes on disk still hash to it. */
+  ifMatch?: string;
+  /** Run once the write is certain to go ahead and before it starts — the file
+   *  watcher's own-write suppression belongs here, so a refused write never
+   *  leaves the watcher primed to swallow somebody else's change. */
+  beforeWrite?: () => void | Promise<void>;
+}
+
+/** Accepts `"abc"`, `abc` and `W/"abc"`; `*` means "whatever is there now". */
+const parseEtag = (value: string): string => value.trim().replace(/^W\//i, '').replace(/^"|"$/g, '');
+
+/**
+ * Save a source file.
+ *
+ * Two failures this guards against, both of which cost text that was never
+ * anywhere else:
+ *
+ * **A half-written paper.** `writeFile` truncates first and fills after, so a
+ * crash, a full disk or a killed process in between leaves the .tex empty or
+ * cut in half — and the file watcher, polling every 500 ms, can read that state
+ * and compile it. Writing a sibling temp file and renaming makes the swap
+ * atomic: a reader sees the whole old file or the whole new one.
+ *
+ * **A silent overwrite.** Two browser tabs, or a tab and Claude's own Edit, and
+ * the last save wins with no sign that anything was lost. `ifMatch` gives the
+ * caller a way to say which version it edited; a mismatch refuses instead of
+ * flattening the other change.
+ */
+export async function writeTextFile(
+  root: string,
+  rel: string,
+  content: string,
+  options: WriteTextOptions = {},
+): Promise<{ etag: string }> {
   if (Buffer.byteLength(content, 'utf8') > MAX_FILE_BYTES) throw new Error('file too large');
-  await writeFile(await guard(root, rel), content, 'utf8');
+  const full = await guard(root, rel);
+
+  if (options.ifMatch !== undefined) {
+    const expected = parseEtag(options.ifMatch);
+    const current = await readFile(full).then(etagOf, () => undefined);
+    // A file that has since been deleted is "changed" too — the version the
+    // editor is holding cannot be written back over something that is gone
+    // without deciding, on the user's behalf, that it should come back.
+    const matches = expected === '*' ? current !== undefined : current === expected.toLowerCase();
+    if (!matches) throw new FileChangedOnDiskError();
+  }
+
+  await options.beforeWrite?.();
+
+  const bytes = Buffer.from(content, 'utf8');
+  // Same directory, so the rename is a rename and not a cross-volume copy.
+  // Leading dot and a non-source suffix keep it out of the file tree, the
+  // watcher and the checkpoint walk for the moment it exists.
+  const temporary = join(dirname(full), `.${basename(full)}.tc-save-${randomBytes(4).toString('hex')}`);
+  try {
+    await writeFile(temporary, bytes);
+    await rename(temporary, full);
+  } catch (error) {
+    await unlink(temporary).catch(() => {});
+    // Windows can refuse the rename while another process holds the target open
+    // — Dropbox and antivirus scanners both do, briefly. A direct write is the
+    // weaker guarantee, but "your save did not happen" is the worse answer.
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY') throw error;
+    await writeFile(full, bytes);
+  }
+  return { etag: etagOf(bytes) };
 }
 
 /** Write an uploaded figure/asset (or text file) as raw bytes, guarded. */

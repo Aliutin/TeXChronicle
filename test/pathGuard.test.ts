@@ -81,6 +81,55 @@ test('an exact TeX-referenced graphicspath asset may live outside a plain projec
   );
 });
 
+test('a TeX reference reaches one directory out, and no further', async () => {
+  // "The source names it, so it is allowed" was written for one real shape: a
+  // draft in `paper/` including `../figures/map.pdf`. On its own it is not a
+  // boundary at all — `\graphicspath{{../../}}` in a downloaded template makes
+  // /api/asset serve any figure-extension file from anywhere above the project,
+  // and any .tex in the project can put that line there. The escape is capped
+  // at the boundary's parent, which is the only distance the feature needed.
+  const base = mkdtempSync(join(tmpdir(), 'texchronicle-escape-'));
+  const nest = join(base, 'nest');
+  const root = join(nest, 'paper');
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(nest, 'shared.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  writeFileSync(join(base, 'private.png'), 'PRIVATE IMAGE');
+  writeFileSync(join(root, 'main.tex'), String.raw`\includegraphics{../shared.png}
+\includegraphics{../../private.png}
+`);
+
+  const sibling = await resolveAssetFile(root, '../shared.png', 'main.tex');
+  assert.equal(sibling.fullPath, join(nest, 'shared.png'), 'the one-level sibling case must keep working');
+
+  await assert.rejects(
+    () => resolveAssetFile(root, '../../private.png', 'main.tex'),
+    /outside|not found/,
+    `naming a file two directories up in a .tex still served ${join(base, 'private.png')}`,
+  );
+});
+
+test('an absolute path in a .tex authorizes nothing', async () => {
+  // The same rule reached its limit case: an absolute \includegraphics is a
+  // path to anywhere on the disk, and being written in the project's own source
+  // does not make it the project's artwork. One such line left in a shared
+  // template is read-anything.
+  const { base, root, outside } = project();
+  writeFileSync(join(outside, 'private.png'), 'PRIVATE IMAGE');
+  const absolute = join(outside, 'private.png').replace(/\\/g, '/');
+  writeFileSync(join(root, 'main.tex'), `\\includegraphics{${absolute}}\n`);
+
+  await assert.rejects(
+    () => resolveAssetFile(root, absolute, 'main.tex'),
+    /outside|not found/,
+    `an absolute reference served ${absolute}`,
+  );
+  // Not even one directory up, where a relative reference would be allowed.
+  writeFileSync(join(base, 'nearby.png'), 'ALSO PRIVATE');
+  const nearby = join(base, 'nearby.png').replace(/\\/g, '/');
+  writeFileSync(join(root, 'main.tex'), `\\includegraphics{${nearby}}\n`);
+  await assert.rejects(() => resolveAssetFile(root, nearby, 'main.tex'), /outside|not found/);
+});
+
 test('commented includegraphics does not authorize an external asset', async () => {
   const { base, root } = project();
   const figures = join(base, 'shared-figures');

@@ -68,6 +68,7 @@ export function PdfView({
       setNote('Loading PDF…');
       step = `fetching ${pdfUrl}`;
       const res = await fetch(`${pdfUrl}${pdfUrl.includes('?') ? '&' : '?'}t=${Date.now()}`);
+      if (cancelled) return;
       if (!res.ok) {
         setNoteIsReport(false);
         setNote(missingMessage ?? 'No PDF yet — wait for the initial compile or click Recompile.');
@@ -91,6 +92,7 @@ export function PdfView({
       const hadPages = container.childElementCount > 0;
       const next = document.createDocumentFragment();
       for (let i = 1; i <= doc.numPages; i++) {
+        if (cancelled) return;
         if (hadPages || i === 1) setNote(`Rendering page ${i} of ${doc.numPages}…`);
         step = `page ${i}/${doc.numPages}: getPage`;
         const pg = await doc.getPage(i);
@@ -118,9 +120,11 @@ export function PdfView({
         // `canvasContext` to a back-compat alias, so pass the element.
         step = `page ${i}/${doc.numPages}: canvas render`;
         await pg.render({ canvas, viewport: vp }).promise;
+        if (cancelled) return;
         step = `page ${i}/${doc.numPages}: text layer`;
         const textLayer = new pdfjs.TextLayer({ textContentSource: pg.streamTextContent(), container: textDiv, viewport: vp });
         await textLayer.render();
+        if (cancelled) return;
         // Column boundaries come from the PDF's own coordinates, not from the
         // rendered text layer. That layer is an approximation which degrades at
         // small font sizes — spans overflow into their neighbours and fill the
@@ -148,6 +152,15 @@ export function PdfView({
         } catch (e) {
           console.warn(`[texchronicle] column detection skipped — ${step}`, e);
         }
+        // Everything this run needs from the page is done. Without cleanup
+        // pdf.js keeps each page's operator list and fonts alive, so scrolling a
+        // long paper grew memory until the tab was unusable.
+        pg.cleanup();
+        // Three awaits stand between the guard at the top of this iteration and
+        // this line. A superseded run that reaches here appends a page from the
+        // OLD document into the container the new run is filling: two nodes with
+        // data-page="1", and goToPage jumps to whichever comes first.
+        if (cancelled) return;
         if (!hadPages) {
           // Moving the wrapper out of the fragment makes the page visible;
           // later pages continue rendering without covering page 1 with a

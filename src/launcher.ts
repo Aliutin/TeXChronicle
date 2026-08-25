@@ -363,7 +363,13 @@ export function resolveLaunchTarget(
   rawMain?: string,
 ): LaunchTarget {
   const absoluteMain = rawMain && isAbsolute(rawMain) ? resolve(rawMain) : undefined;
-  const projectRoot = resolve(projectOption ?? (absoluteMain ? dirname(absoluteMain) : cwd));
+  // A relative --project resolves against the caller's cwd, not the process's.
+  // This function is handed a cwd precisely because the two can differ — the
+  // desktop picker passes the directory it was opened in — and `-p .` used to
+  // land on whatever directory the process happened to be started from.
+  const projectRoot = projectOption !== undefined
+    ? resolve(cwd, projectOption)
+    : resolve(absoluteMain ? dirname(absoluteMain) : cwd);
   if (!rawMain) return { projectRoot };
 
   const mainFile = relative(projectRoot, absoluteMain ?? resolve(projectRoot, rawMain)).replace(/\\/g, '/');

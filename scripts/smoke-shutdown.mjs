@@ -79,6 +79,8 @@ try {
   // cannot be fetched at all, so a tab opened later has nothing to type into —
   // which is not the case under test. The case under test is the one that loses
   // work: an editor already open, with the user still typing into it.
+  // The workspace opens on the PDF view; the editor lives behind the Code view.
+  await page.click('nav.workspace-nav button:has-text("Code")').catch(() => {});
   await page.click('.tabs button:has-text("Source")').catch(() => {});
   const editor = await page.waitForSelector('.cm-content', { timeout: 20_000 }).catch(() => null);
   check('the editor is open before the shutdown', !!editor, 'no CodeMirror editor appeared');

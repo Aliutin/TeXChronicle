@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, existsSync, unlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -93,6 +93,114 @@ test('restoring does not rewrite .claude/', async () => {
   assert.equal(lines(readFileSync(join(root, 'main.tex'), 'utf8')), 'v1\n', 'the paper was not restored');
   assert.match(readFileSync(join(cmd, 'render.md'), 'utf8'), /NEW/,
     '.claude was rolled back by a restore of the paper');
+});
+
+test('restoring never writes over a file the safety snapshot cannot capture', async () => {
+  // The restore is only safe because the current files are checkpointed first.
+  // But checkpoints stopped capturing compiler output — .aux, .out, and a PDF
+  // that has a same-stem .tex beside it — while `checkout-index -a -f` still
+  // wrote every path in the OLD checkpoint's tree. So restoring one taken by an
+  // earlier release put a stale chapter.pdf and notes.out back over the current
+  // ones, and the snapshot taken moments before held neither: those bytes then
+  // existed nowhere at all. (.out is a LaTeX auxiliary by extension; on a real
+  // desk it is just as likely to be the author's own notes, which is why the
+  // fixture reads the way it does.)
+  const root = project();
+  writeFileSync(join(root, 'chapter.tex'), 'v1\n');
+  writeFileSync(join(root, 'chapter.pdf'), 'PDF-VERSION-1');
+  writeFileSync(join(root, 'notes.out'), 'IRREPLACEABLE USER DATA v1');
+  const sha = legacyCheckpoint(root);
+  const staged = execFileSync('git', ['ls-tree', '-r', '--name-only', sha], { cwd: root, stdio: 'pipe' }).toString();
+  assert.match(staged, /chapter\.pdf/, 'the fixture is not in the checkpoint, so this test could not detect the bug');
+  assert.match(staged, /notes\.out/, 'the fixture is not in the checkpoint, so this test could not detect the bug');
+
+  writeFileSync(join(root, 'chapter.tex'), 'v2 - an hour of work\n');
+  writeFileSync(join(root, 'chapter.pdf'), 'PDF-VERSION-2');
+  writeFileSync(join(root, 'notes.out'), 'IRREPLACEABLE USER DATA v2');
+
+  await restoreCheckpoint(root, sha);
+
+  assert.equal(lines(readFileSync(join(root, 'chapter.tex'), 'utf8')), 'v1\n', 'the paper was not restored');
+  assert.equal(readFileSync(join(root, 'chapter.pdf'), 'utf8'), 'PDF-VERSION-2',
+    'a generated PDF was rolled back to a version no snapshot holds');
+  assert.equal(readFileSync(join(root, 'notes.out'), 'utf8'), 'IRREPLACEABLE USER DATA v2',
+    'notes.out was overwritten and its contents exist in no checkpoint');
+});
+
+test('restoring one such file is refused rather than done one-way', async () => {
+  // Same rule, per file: if a restore cannot be undone because the snapshot
+  // would not have captured what it overwrites, it must not happen silently.
+  const root = project();
+  writeFileSync(join(root, 'notes.out'), 'v1');
+  const sha = legacyCheckpoint(root);
+  writeFileSync(join(root, 'notes.out'), 'v2');
+  await assert.rejects(() => restoreFile(root, sha, 'notes.out'), /no longer snapshots generated files/);
+  assert.equal(readFileSync(join(root, 'notes.out'), 'utf8'), 'v2');
+});
+
+test('one vanishing scratch file does not fail the whole checkpoint', async () => {
+  // A path can be listed and gone microseconds later: editors save atomically
+  // (write temp, rename over) and TeX runs drop scratch files constantly. That
+  // aborted the entire `git add`, so ONE of them failed the checkpoint — the
+  // timeline got a hole, the working diff came back empty, and resolve_comment
+  // answered "dirty" about a tree nobody had touched. Measured at 2-4 of 12
+  // before the fix, 0 of 12 after.
+  const root = project();
+  for (let i = 0; i < 400; i++) writeFileSync(join(root, `data${i}.dat`), String(i));
+  await createCheckpoint(root);
+
+  const scratch = join(root, 'scratch-temp.dat');
+  const churn = setInterval(() => {
+    if (existsSync(scratch)) { try { unlinkSync(scratch); } catch { /* mid-delete */ } }
+    else { try { writeFileSync(scratch, 'x'); } catch { /* mid-create */ } }
+  }, 3);
+  const failures: string[] = [];
+  try {
+    for (let i = 0; i < 10; i++) {
+      writeFileSync(join(root, 'main.tex'), `v${i}\n`);
+      const result = await createCheckpoint(root);
+      if (result.reason === 'failed') failures.push(result.error ?? 'failed');
+    }
+  } finally {
+    clearInterval(churn);
+    try { unlinkSync(scratch); } catch { /* already gone */ }
+  }
+  assert.deepEqual(failures, [], 'a disappearing temp file killed a checkpoint');
+});
+
+test('a file that is there but unreadable still fails the checkpoint', async (t) => {
+  // The other half of the rule above, and the one that matters more: tolerating
+  // "the file was not there" must not become tolerating "the file could not be
+  // read". A snapshot silently missing a figure the author still has is exactly
+  // the promise this feature makes and would be breaking.
+  if (process.platform !== 'win32') return t.skip('needs an OS-level deny this test knows how to set');
+  const root = project();
+  const locked = join(root, 'figure.png');
+  writeFileSync(locked, 'PNG BYTES');
+  try {
+    execFileSync('icacls', [locked, '/deny', '*S-1-1-0:(R)'], { stdio: 'pipe' }); // Everyone
+  } catch { return t.skip('cannot deny read on this filesystem'); }
+  try {
+    // Prove the fixture bites BEFORE asserting anything about it — and prove it
+    // against git, which is what has to fail. (This sandbox reads the file
+    // happily through Node while git gets Permission denied, so asking Node
+    // would have skipped a test that can in fact run here.)
+    let deniedToGit = false;
+    try {
+      execFileSync('git', ['add', '-f', '--ignore-errors', '--', 'figure.png'], {
+        cwd: root, stdio: 'pipe',
+        env: { ...process.env, LC_ALL: 'C', GIT_INDEX_FILE: join(tmpdir(), `deny-${Math.random().toString(16).slice(2)}.index`) },
+      });
+    } catch (e) { deniedToGit = /Permission denied/.test(String((e as { stderr?: unknown }).stderr)); }
+    if (!deniedToGit) return t.skip('the deny did not take effect for git');
+
+    const result = await createCheckpoint(root);
+    assert.equal(result.created, false, 'an unreadable file was quietly left out of the snapshot');
+    assert.equal(result.reason, 'failed');
+    assert.match(result.error ?? '', /Permission denied/);
+  } finally {
+    execFileSync('icacls', [locked, '/remove:d', '*S-1-1-0'], { stdio: 'pipe' });
+  }
 });
 
 test('restore refuses when it could not snapshot the current state first', async () => {

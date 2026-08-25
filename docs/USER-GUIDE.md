@@ -161,7 +161,10 @@ fuzzy match so you know to inspect that transition rather than trust it silently
 
 The source history lives in the hidden Git ref described below. Exact PDFs live beside it at
 `.latex-preview/renders/<checkpoint>.pdf`; they are excluded from Git because binary PDF deltas
-grow quickly. Both are inside the project folder for plain-folder projects, so Dropbox can carry
+grow quickly. `renders/` keeps one PDF per checkpoint and is never pruned, so it grows with the
+paper; deleting old `.latex-preview/renders/*.pdf` is safe — the only thing that stops working is
+**View PDF** for those checkpoints, and the source history is untouched. Both are inside the
+project folder for plain-folder projects, so Dropbox can carry
 them across machines. Let Dropbox finish syncing before opening the same project elsewhere, and
 avoid editing it concurrently on two machines; a normal Git remote is safer for concurrent source
 work.

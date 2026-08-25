@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { addComment, listComments, updateComment, addReply, deleteComment, markCommentsForRestoreReview } from '../src/preview/commentsStore.js';
@@ -89,6 +89,45 @@ test('reply threads append in order', async () => {
     assert.equal(replies.length, 2);
     assert.equal(replies[0].by, 'author');
     assert.equal(replies[1].by, 'human');
+  } finally { rmSync(d, { recursive: true, force: true }); }
+});
+
+test('one junk entry does not take the whole comment feature down', async () => {
+  // Every comment route reads through listComments, so throwing on a single
+  // malformed item bricked all of them: the panel, the MCP tools, resolve — for
+  // a `null` or a stray string that nobody could even see. What is skipped here
+  // cannot be a comment at all, so there is nothing in it to lose; the entries
+  // that ARE comments must all still arrive.
+  const d = tmp();
+  try {
+    const good = await addComment(d, { page: 1, quote: 'q', rects: [], text: 'real comment' });
+    const store = join(d, '.latex-preview', 'comments.json');
+    const parsed = JSON.parse(readFileSync(store, 'utf8')) as unknown[];
+    writeFileSync(store, JSON.stringify([null, ...parsed, 'not a comment', 42, []], null, 2), 'utf8');
+
+    const all = await listComments(d);
+    assert.equal(all.length, 1, `junk was returned as comments: ${JSON.stringify(all)}`);
+    assert.equal(all[0].id, good.id);
+
+    // And the routes that mutate keep working over it, rather than inheriting
+    // the same failure one call later.
+    const replied = await addReply(d, good.id, { by: 'human', text: 'still works' });
+    assert.equal(replied?.replies?.length, 1);
+  } finally { rmSync(d, { recursive: true, force: true }); }
+});
+
+test('a store that will not parse is still refused, not guessed at', async () => {
+  // The line between the two: an item that cannot be a comment is worth
+  // nothing, but a file that does not parse might be a whole store of them, and
+  // returning [] for it is how they get overwritten and lost.
+  const d = tmp();
+  try {
+    await addComment(d, { page: 1, quote: 'q', rects: [], text: 'first' });
+    const store = join(d, '.latex-preview', 'comments.json');
+    writeFileSync(store, readFileSync(store, 'utf8').replace(/\}\s*\]$/, '},]'), 'utf8');
+    await assert.rejects(() => listComments(d), (e: Error) => e.name === 'CommentStoreUnreadableError');
+    writeFileSync(store, '{"not":"an array"}', 'utf8');
+    await assert.rejects(() => listComments(d), (e: Error) => e.name === 'CommentStoreUnreadableError');
   } finally { rmSync(d, { recursive: true, force: true }); }
 });
 

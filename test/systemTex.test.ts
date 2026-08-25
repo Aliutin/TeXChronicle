@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, chmodSync, copyFileSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync, chmodSync, copyFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { probeSystemTex, forgetSystemTex, isStaleLatexmkFailure, systemBuildDir, systemLatexmkArgs, systemTexUnavailableMessage, systemTexAdvice } from '../src/engine/systemTex.js';
+import { probeSystemTex, forgetSystemTex, isStaleLatexmkFailure, posixLatexmkCandidates, sweepStaleBuildDirs, systemBuildDir, systemLatexmkArgs, systemTexResult, systemTexUnavailableMessage, systemTexAdvice } from '../src/engine/systemTex.js';
 
 // "No local TeX" and "a local TeX that cannot run" are different problems with
 // opposite answers, and they used to produce the same sentence. A user installed
@@ -131,6 +131,105 @@ test('system TeX artifacts are isolated per TeXChronicle process', () => {
   const root = join(tmpdir(), 'paper');
   assert.notEqual(systemBuildDir(root, 1001), systemBuildDir(root, 1002));
   assert.match(systemBuildDir(root, 1001).replace(/\\/g, '/'), /\.latex-preview\/build\/1001-[0-9a-f]{8}$/);
+});
+
+test('latexmk compiles from the main file\'s own directory', () => {
+  // `paper/main.tex` with `\input{sections/body}` means `paper/sections`. Run
+  // from the project root instead, the document died on "File
+  // `sections/body.tex' not found" — while the WASM backend compiled it fine.
+  const args = systemLatexmkArgs('/tmp/build', 'paper/main.tex', 'pdflatex');
+  assert.ok(args.includes('-cd'), 'a main file in a subdirectory could not resolve its own relative inputs');
+  assert.ok(args.some((a) => a.startsWith('-outdir=')), 'the build directory has to stay absolute, or -cd moves it');
+});
+
+// ── a PDF that exists is a PDF, whatever latexmk exited with ─────────────────
+
+const PDF = new Uint8Array([0x25, 0x50, 0x44, 0x46]);
+
+test('an ordinary LaTeX error still hands back the PDF LaTeX wrote', () => {
+  // latexmk exits 12 on any error even under -f. Reading the PDF only on exit 0
+  // meant one typo produced pdfLen=0 — so a paper that typeset every page came
+  // back as "your local TeX produced nothing", and `auto` switched to the
+  // bundled engine behind the user's back.
+  const r = systemTexResult(12, '! Undefined control sequence.', 40, { pdf: PDF });
+  assert.equal(r.pdfLen, 4, 'the pages were there and were thrown away');
+  assert.equal(r.success, false, 'the exit code still decides success');
+  assert.match(r.error ?? '', /wrote a PDF/, 'the reader has to be told this is an ordinary source error');
+});
+
+test('a clean run is a clean run', () => {
+  const r = systemTexResult(0, 'Output written on main.pdf', 40, { pdf: PDF, syncTex: PDF });
+  assert.equal(r.success, true);
+  assert.equal(r.error, undefined, 'nothing to explain');
+  assert.ok(r.syncTex, 'the source map has to survive');
+});
+
+test('no PDF at all is reported differently depending on what latexmk claimed', () => {
+  assert.match(systemTexResult(0, '', 1).error ?? '', /reported success but wrote no PDF/);
+  assert.match(systemTexResult(12, '', 1).error ?? '', /system latexmk compile failed/);
+  assert.equal(systemTexResult(12, '', 1).pdfLen, 0);
+});
+
+// ── build directories left by processes that are gone ───────────────────────
+
+test('build directories of dead processes are swept, and the live one is not', async () => {
+  // Each process gets its own so two cannot race on the same aux files, and a
+  // graceful exit removes it. Nothing removed them after a crash or a taskkill,
+  // so a project accumulated one abandoned full PDF per hard stop, forever.
+  const root = mkdtempSync(join(tmpdir(), 'texchronicle-sweep-'));
+  try {
+    const build = join(root, '.latex-preview', 'build');
+    const dead = join(build, '999999-deadbeef');
+    const mine = join(build, `${process.pid}-cafebabe`);
+    const notOurs = join(build, 'scratch');
+    for (const d of [dead, mine, notOurs]) mkdirSync(d, { recursive: true });
+    writeFileSync(join(dead, 'main.pdf'), 'x');
+
+    await sweepStaleBuildDirs(root, mine);
+
+    assert.equal(existsSync(dead), false, 'a directory whose PID is gone cannot be in use by anyone');
+    assert.equal(existsSync(mine), true, 'the live build directory must never be touched');
+    assert.equal(existsSync(notOurs), true, 'anything not named <pid>-<session> is not ours to delete');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ── Unix discovery ──────────────────────────────────────────────────────────
+//
+// UNTESTED ON A REAL TARGET: this machine is Windows, so the candidate list is
+// exercised against injected filesystem stubs rather than a MacTeX install.
+
+test('a GUI-launched macOS client finds MacTeX outside its inherited PATH', async () => {
+  // An app-launched MCP client gets /usr/bin:/bin and nothing else — no login
+  // shell has run, so /Library/TeX/texbin is never on it and a full MacTeX is
+  // reported as "no local TeX was found".
+  const present = new Set(['/Library/TeX/texbin/latexmk', '/opt/homebrew/bin/latexmk']);
+  const found = await posixLatexmkCandidates({
+    exists: async (p) => present.has(p),
+    listDir: async () => [],
+  });
+  assert.deepEqual(found, ['/Library/TeX/texbin/latexmk', '/opt/homebrew/bin/latexmk']);
+  assert.equal(found[0], '/Library/TeX/texbin/latexmk', 'the symlink farm is stable across TeX Live years, so it goes first');
+});
+
+test('a versioned TeX Live tree is discovered without guessing the year or the architecture', async () => {
+  const tree: Record<string, string[]> = {
+    '/usr/local/texlive': ['2023', '2025', 'texmf-local'],
+    '/usr/local/texlive/2025/bin': ['universal-darwin'],
+    '/usr/local/texlive/2023/bin': ['x86_64-darwin'],
+    '/usr/local/texlive/texmf-local/bin': [],
+  };
+  const found = await posixLatexmkCandidates({
+    exists: async (p) => p.endsWith('/latexmk') && p.startsWith('/usr/local/texlive'),
+    listDir: async (p) => tree[p] ?? [],
+  });
+  assert.equal(found[0], '/usr/local/texlive/2025/bin/universal-darwin/latexmk', 'the newest install wins');
+  assert.ok(found.includes('/usr/local/texlive/2023/bin/x86_64-darwin/latexmk'));
+});
+
+test('finding nothing is not an error', async () => {
+  assert.deepEqual(await posixLatexmkCandidates({ exists: async () => false, listDir: async () => [] }), []);
 });
 
 // ── the staleness fix ───────────────────────────────────────────────────────

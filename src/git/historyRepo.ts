@@ -122,6 +122,13 @@ async function ignoreToolStorage(root: string): Promise<void> {
     // artifacts rather than source. Keep them out of both the user's ordinary
     // Git repository and TeXChronicle's hidden checkpoint trees.
     lines.add('renders/');
+    // Per-run machine state, added after the first version of this list: the
+    // compiler's scratch directories (build/<pid>-…) and this machine's
+    // workspace-ownership record. Neither means anything on another computer,
+    // and without these two lines both turn up in the author's `git status` as
+    // untracked files they are then invited to commit.
+    lines.add('build/');
+    lines.add('instances/');
     const next = [...lines].join('\n') + '\n';
     if (next !== existing) await writeFile(path, next, 'utf8');
   } catch {
@@ -233,6 +240,28 @@ async function clearStaleInitConfigLock(dir: string): Promise<void> {
   }
 }
 
+/**
+ * Give the checkpoint refs a reflog.
+ *
+ * Git's default, `core.logAllRefUpdates=true`, covers only refs under
+ * `refs/heads`, `refs/remotes`, `refs/notes` and HEAD — and every checkpoint
+ * lives under `refs/latex-preview/`, which is none of those. So the hidden refs
+ * had no reflog at all, and the entire timeline hung from one 41-byte file with
+ * no record of where it used to point. This history sits in a Dropbox folder by
+ * design: when Dropbox resolves a conflict on that file it renames the loser to
+ * "…(conflicted copy)" and the old chain becomes unreferenced — and therefore
+ * eligible for `git gc`, with nothing left to recover it from. `always` logs
+ * every ref, which is what makes `REF@{1}` and `git fsck --lost-found` able to
+ * answer "where was this yesterday". Shadow repositories only: the same setting
+ * in the author's OWN repository is a change to their Git configuration that we
+ * have no business making for them.
+ */
+async function enableAllReflogs(root: string, env: NodeJS.ProcessEnv): Promise<void> {
+  // Best effort and idempotent — a read-only .git/config is a reason to lose
+  // the safety net, never a reason to lose the history feature.
+  await gitOrNull(root, ['config', 'core.logAllRefUpdates', 'always'], { ...process.env, ...env });
+}
+
 async function usableShadowRepo(root: string, dir: string, env: NodeJS.ProcessEnv): Promise<boolean> {
   if (!(await isRepo(dir))) return false;
   return (await gitOrNull(root, ['rev-parse', '--git-dir'], { ...process.env, ...env })) !== null;
@@ -319,8 +348,11 @@ async function resolveHistoryRepo(root: string, key: string): Promise<HistoryRep
   try {
     await initializeShadowRepo(root, dir, env);
     // Existing shadow repos predate render artifacts; upgrade their ignore file
-    // too, not only newly-created stores.
+    // too, not only newly-created stores. Same for the reflog setting: it is
+    // applied on every open rather than only at init, because the stores that
+    // most need a recoverable ref chain are the ones that already exist.
     await ignoreToolStorage(root);
+    await enableAllReflogs(root, env);
     const resolved: HistoryRepo = { mode: 'shadow', env };
     cache.set(key, resolved);
     return resolved;

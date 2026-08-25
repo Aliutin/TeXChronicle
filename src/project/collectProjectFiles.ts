@@ -7,20 +7,55 @@
 // up automatically this way (e.g. acl.sty, llncs.cls), which the engine's bundled
 // package set may not include.
 import { readdir, readFile, stat } from 'node:fs/promises';
-import { join, relative, sep } from 'node:path';
+import { basename, dirname, join, relative, sep } from 'node:path';
 import type { EngineFile } from '../engine/browserHost.js';
 
-const TEXT_EXT = new Set(['.tex', '.bib', '.cls', '.sty', '.bst', '.cfg', '.clo', '.def', '.ldf', '.fd', '.bbx', '.cbx', '.lbx']);
-const BINARY_EXT = new Set(['.png', '.jpg', '.jpeg', '.pdf', '.eps', '.svg', '.ttf', '.otf', '.gif']);
+// Everything TeX reads as text. Wider than it looks it needs to be, because a
+// missing extension is invisible: the file is simply absent at compile time and
+// LaTeX reports something unrelated. `.bbl` is how arXiv sources ship their
+// bibliography, `.txt`/`.csv`/`.dat`/`.tsv` are what pgfplots and \input pull in,
+// `.pdf_tex` is Inkscape's LaTeX-overlay half of an exported figure, and
+// `.bcf`/`.glo`/`.nls`/`.ist`/`.gst` are the auxiliary tool inputs.
+const TEXT_EXT = new Set([
+  '.tex', '.bib', '.cls', '.sty', '.bst', '.cfg', '.clo', '.def', '.ldf', '.fd', '.bbx', '.cbx', '.lbx',
+  '.bbl', '.ist', '.gst', '.glo', '.nls', '.bcf', '.txt', '.csv', '.dat', '.tsv', '.pdf_tex', '.pgf',
+  '.tikz', '.ltx', '.lua', '.inc',
+]);
+const BINARY_EXT = new Set([
+  '.png', '.jpg', '.jpeg', '.pdf', '.eps', '.svg', '.ttf', '.otf', '.gif',
+  // Font and image formats a real paper ships when it carries its own fonts or
+  // scanned figures. Absent from the engine, a font file is a fatal error.
+  '.pfb', '.tfm', '.vf', '.afm', '.enc', '.map', '.ttc', '.bmp', '.tif', '.tiff', '.mps',
+]);
 const SKIP_DIRS = new Set(['.git', 'node_modules', '.latex-preview', '.vscode', '__pycache__']);
 
 const MAX_TOTAL_BYTES = 60 * 1024 * 1024; // 60 MB
 const MAX_FILES = 800;
+// A ceiling on the scan itself, not on what we send. The caps below need the
+// whole candidate list before they can choose, so the walk can no longer stop
+// the moment a budget runs out; this keeps a project root pointed at a home
+// directory from turning into an unbounded traversal.
+const MAX_SCANNED = 20_000;
+
+export interface CollectOptions {
+  /** The project-relative main file, when the caller knows it. It is collected
+   *  first, and its own build outputs are skipped. */
+  mainFile?: string;
+  /** Read only the text sources. The stats still describe the whole project, so
+   *  `count`/`totalBytes`/`truncated` mean the same thing either way. */
+  textOnly?: boolean;
+}
 
 export interface CollectResult {
   files: EngineFile[];
   truncated: boolean;
   totalBytes: number;
+  /** How many files the caps admitted — including binaries that `textOnly` did
+   *  not read, so this always describes the project rather than the request. */
+  count: number;
+  /** What the caps left out, for a caller that has to explain a missing figure. */
+  skippedFiles: number;
+  skippedBytes: number;
 }
 
 function extOf(name: string): string {
@@ -30,8 +65,8 @@ function extOf(name: string): string {
 
 const toPosix = (p: string) => p.split(sep).join('/');
 
-export function collectProjectFiles(projectRoot: string): Promise<CollectResult> {
-  return walkProject(projectRoot, true);
+export function collectProjectFiles(projectRoot: string, opts: CollectOptions = {}): Promise<CollectResult> {
+  return walkProject(projectRoot, true, opts);
 }
 
 /**
@@ -43,22 +78,39 @@ export function collectProjectFiles(projectRoot: string): Promise<CollectResult>
  * there was 32.4 MB read and discarded on every save of a real IEEE paper (the
  * cap is 60 MB), purely to be able to say "49 files" at the end.
  */
-export async function countProjectFiles(projectRoot: string): Promise<{ count: number; truncated: boolean; totalBytes: number }> {
-  const { count, truncated, totalBytes } = await walkProject(projectRoot, false);
-  return { count, truncated, totalBytes };
+export async function countProjectFiles(
+  projectRoot: string,
+  opts: CollectOptions = {},
+): Promise<{ count: number; truncated: boolean; totalBytes: number; skippedFiles: number; skippedBytes: number }> {
+  const { count, truncated, totalBytes, skippedFiles, skippedBytes } = await walkProject(projectRoot, false, opts);
+  return { count, truncated, totalBytes, skippedFiles, skippedBytes };
 }
 
-async function walkProject(projectRoot: string, readContents: boolean): Promise<CollectResult & { count: number }> {
-  const files: EngineFile[] = [];
-  let count = 0;
-  let totalBytes = 0;
-  let truncated = false;
+interface Candidate {
+  full: string;
+  rel: string;
+  size: number;
+  isText: boolean;
+}
+
+async function walkProject(projectRoot: string, readContents: boolean, opts: CollectOptions): Promise<CollectResult> {
+  const mainRel = opts.mainFile ? toPosix(opts.mainFile).replace(/^\.\//, '') : undefined;
+  // A project's own build outputs are not inputs. A 20 MB `main.pdf` left by a
+  // previous latexmk run ate a third of the whole budget on the way to evicting
+  // the sources that produced it.
+  const buildOutputs = new Set(
+    mainRel
+      ? [`${stripExt(mainRel)}.pdf`, `${stripExt(mainRel)}.synctex.gz`]
+      : [],
+  );
+
+  const candidates: Candidate[] = [];
+  let scanned = 0;
+  let overflowed = false;
 
   async function walk(dir: string): Promise<void> {
-    if (truncated) return;
     const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
     for (const e of entries) {
-      if (truncated) return;
       const full = join(dir, e.name);
       if (e.isDirectory()) {
         if (SKIP_DIRS.has(e.name) || e.name.startsWith('.')) continue;
@@ -70,26 +122,97 @@ async function walkProject(projectRoot: string, readContents: boolean): Promise<
       const isText = TEXT_EXT.has(ext);
       const isBin = BINARY_EXT.has(ext);
       if (!isText && !isBin) continue;
+      const rel = toPosix(relative(projectRoot, full));
+      if (buildOutputs.has(rel)) continue;
+      if (scanned++ >= MAX_SCANNED) { overflowed = true; return; }
 
       const s = await stat(full).catch(() => null);
       if (!s) continue;
-      // Counted rather than `files.length`, so the caps land in the same place
-      // whether or not contents are being read — otherwise "how big is this
-      // project" and "what did we send the engine" could disagree.
-      if (count >= MAX_FILES || totalBytes + s.size > MAX_TOTAL_BYTES) { truncated = true; return; }
-      count++;
-      totalBytes += s.size;
-
-      if (!readContents) continue;
-      const rel = toPosix(relative(projectRoot, full));
-      if (isText) {
-        files.push({ path: rel, content: await readFile(full, 'utf8'), encoding: 'utf8' });
-      } else {
-        files.push({ path: rel, content: (await readFile(full)).toString('base64'), encoding: 'base64' });
-      }
+      candidates.push({ full, rel, size: s.size, isText });
     }
   }
 
   await walk(projectRoot);
-  return { files, truncated, totalBytes, count };
+
+  // The order the caps see, and the whole point of this rewrite. It used to be
+  // directory order, which is alphabetical — so `figures/` came before
+  // `main.tex`, and a thesis with 70 MB of plots had its own source evicted by
+  // its own illustrations. The engine then compiled an empty string and reported
+  // an emergency stop, with nothing anywhere saying the paper had been dropped.
+  //
+  // Main file first (it is the one file without which nothing else means
+  // anything), then every text source, then the binaries with whatever budget
+  // is left. Losing a figure degrades a preview; losing a chapter destroys it.
+  //
+  // Shallowest first within each tier, because callers that do not know the main
+  // file still need the document root to survive: 900 generated fragments under
+  // `aaa/` are all text too, and in directory order they filled the file cap
+  // before `main.tex` was ever reached.
+  const rank = (c: Candidate) => (c.rel === mainRel ? 0 : c.isText ? 1 : 2);
+  const depth = (c: Candidate) => c.rel.split('/').length;
+  const ordered = candidates
+    .map((c, i) => ({ c, i }))
+    .sort((a, b) => rank(a.c) - rank(b.c) || depth(a.c) - depth(b.c) || a.i - b.i)
+    .map(({ c }) => c);
+
+  const picked: Candidate[] = [];
+  let totalBytes = 0;
+  let truncated = overflowed;
+  let skippedFiles = overflowed ? 1 : 0; // at least the one that tripped the scan cap
+  let skippedBytes = 0;
+  for (const c of ordered) {
+    // The main file is never subject to the caps: a budget that can drop the
+    // document root is not a budget, it is a bug with a number attached.
+    const exempt = c.rel === mainRel;
+    if (!exempt && (picked.length >= MAX_FILES || totalBytes + c.size > MAX_TOTAL_BYTES)) {
+      truncated = true;
+      skippedFiles++;
+      skippedBytes += c.size;
+      continue;
+    }
+    picked.push(c);
+    totalBytes += c.size;
+  }
+
+  const files: EngineFile[] = [];
+  if (readContents) {
+    for (const c of picked) {
+      if (!c.isText) {
+        if (opts.textOnly) continue;
+        files.push({ path: c.rel, content: (await readFile(c.full)).toString('base64'), encoding: 'base64' });
+        continue;
+      }
+      files.push(await readTextFile(c));
+    }
+  }
+
+  return { files, truncated, totalBytes, count: picked.length, skippedFiles, skippedBytes };
+}
+
+const UTF8 = new TextDecoder('utf-8', { fatal: true });
+
+/**
+ * Text, but only if it really is UTF-8.
+ *
+ * `readFile(…, 'utf8')` never fails: it replaces every byte it cannot decode
+ * with U+FFFD. A Latin-1 paper — `\usepackage[latin1]{inputenc}`, still common
+ * in older European theses — therefore reached the engine with every accented
+ * character replaced by a replacement character, and compiled into a PDF full of
+ * question marks with no error anywhere. Sending the original bytes as base64
+ * instead costs nothing and preserves the file exactly; the engine writes both
+ * encodings to its filesystem the same way.
+ */
+async function readTextFile(c: Candidate): Promise<EngineFile> {
+  const buf = await readFile(c.full);
+  try {
+    return { path: c.rel, content: UTF8.decode(buf), encoding: 'utf8' };
+  } catch {
+    return { path: c.rel, content: buf.toString('base64'), encoding: 'base64' };
+  }
+}
+
+function stripExt(rel: string): string {
+  const dir = dirname(rel);
+  const name = basename(rel).replace(/\.[^.]*$/, '');
+  return dir === '.' ? name : `${toPosix(dir)}/${name}`;
 }

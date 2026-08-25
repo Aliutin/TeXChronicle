@@ -3,7 +3,7 @@
 // WASM engine is needed — this stays fast and reliable in CI.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -73,4 +73,112 @@ test('review workflow over MCP: post → gate → located → thread → resolve
     await client.close();
     rmSync(proj, { recursive: true, force: true });
   }
+});
+
+/** A directory shaped like somebody's home folder: ordinary subfolders, no .tex. */
+function fakeHome(): string {
+  const home = mkdtempSync(join(tmpdir(), 'e2e-home-'));
+  for (const name of ['Documents', 'Downloads', 'Pictures']) mkdirSync(join(home, name));
+  writeFileSync(join(home, 'notes.txt'), 'x');
+  return home;
+}
+
+const connect = async (cwd: string, args: string[] = [], extraEnv: Record<string, string> = {}) => {
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [server, ...args],
+    cwd,
+    env: { ...inheritedEnv, ...extraEnv },
+  });
+  const client = new Client({ name: 'ci', version: '0' }, { capabilities: {} });
+  await client.connect(transport);
+  return {
+    client,
+    call: async (name: string, callArgs: Record<string, unknown> = {}) => {
+      const result = await client.callTool({ name, arguments: callArgs });
+      return {
+        isError: result.isError === true,
+        text: (result.content as { text?: string }[]).map((x) => x.text ?? '').join('\n'),
+      };
+    },
+  };
+};
+
+// Claude Code and Codex spawn the server inside the paper; other clients spawn it
+// from the user's home directory. Started there, the server used to answer "No
+// .tex files found" — but only AFTER startWatching() had pinned a recursive
+// watcher to the home folder and the coordinator had created
+// .latex-preview/history.git inside it. Both had to move behind the guard.
+test('a wrong project root is refused before anything is written into it', { timeout: 60_000 }, async () => {
+  const home = fakeHome();
+  const { client, call } = await connect(home);
+  try {
+    const rendered = await call('render_preview');
+    assert.equal(rendered.isError, true);
+    assert.match(rendered.text, /does not look like a LaTeX project/);
+    assert.ok(rendered.text.includes(home), 'the error must name the directory it refused');
+    assert.match(rendered.text, /TEXCHRONICLE_PROJECT/);
+    assert.match(rendered.text, /--project/);
+
+    // The read-only tools reach historyRepo(), which CREATES the store — so they
+    // are guarded too, or the second tool call undoes the first guard's work.
+    for (const tool of ['list_checkpoints', 'check_comments']) {
+      const result = await call(tool);
+      assert.equal(result.isError, true, `${tool} should refuse the wrong root`);
+      assert.match(result.text, /does not look like a LaTeX project/);
+    }
+  } finally {
+    await client.close();
+  }
+  // Give the server's teardown a moment to finish before looking.
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  assert.equal(existsSync(join(home, '.latex-preview')), false,
+    'no history store may be created in a directory that is not a project');
+  rmSync(home, { recursive: true, force: true });
+});
+
+// The rescue, proved through the comment tools rather than render_preview: a
+// successful render would start Chromium and the WASM engine, which this file
+// deliberately avoids. The store landing in the paper is the whole claim.
+test('TEXCHRONICLE_PROJECT rescues a server started in the wrong directory', { timeout: 60_000 }, async () => {
+  const home = fakeHome();
+  const proj = mkdtempSync(join(tmpdir(), 'e2e-paper-'));
+  writeFileSync(join(proj, 'main.tex'),
+    '\\documentclass{article}\n\\begin{document}\nA sentence to anchor a comment onto.\n\\end{document}\n');
+  const { client, call } = await connect(home, [], { TEXCHRONICLE_PROJECT: proj });
+  try {
+    const posted = await call('add_comment', { quote: 'A sentence to anchor', comment: 'Rescued.', accepted: true });
+    assert.equal(posted.isError, false, posted.text);
+    const checked = await call('check_comments');
+    assert.match(checked.text, /1 accepted comment/);
+    assert.match(checked.text, /main\.tex:3/, 'the anchor must be found in the paper, not the cwd');
+  } finally {
+    await client.close();
+  }
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  assert.equal(existsSync(join(home, '.latex-preview')), false, 'nothing may be written into the cwd');
+  assert.equal(existsSync(join(proj, '.latex-preview')), true, 'the store belongs to the paper');
+  rmSync(home, { recursive: true, force: true });
+  rmSync(proj, { recursive: true, force: true });
+});
+
+// bin/cli.mjs treated argv[2] as a subcommand, so this exact invocation printed
+// "Unknown command: --project" and exited before the server ever started.
+test('--project reaches the server through bin/cli.mjs', { timeout: 60_000 }, async () => {
+  const home = fakeHome();
+  const proj = mkdtempSync(join(tmpdir(), 'e2e-paper-'));
+  writeFileSync(join(proj, 'main.tex'),
+    '\\documentclass{article}\n\\begin{document}\nAnother anchorable sentence.\n\\end{document}\n');
+  const { client, call } = await connect(home, ['--project', proj]);
+  try {
+    const posted = await call('add_comment', { quote: 'Another anchorable', comment: 'Rescued.', accepted: true });
+    assert.equal(posted.isError, false, posted.text);
+  } finally {
+    await client.close();
+  }
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  assert.equal(existsSync(join(home, '.latex-preview')), false, 'nothing may be written into the cwd');
+  assert.equal(existsSync(join(proj, '.latex-preview')), true, 'the store belongs to the paper');
+  rmSync(home, { recursive: true, force: true });
+  rmSync(proj, { recursive: true, force: true });
 });

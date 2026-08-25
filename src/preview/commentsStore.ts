@@ -61,6 +61,10 @@ export interface Comment {
 
 const FILE = 'comments.json';
 
+/** Stores already reported as holding junk, so the warning does not repeat on
+ *  every poll of the comments panel. */
+const warnedAboutSkipped = new Set<string>();
+
 function storePath(root: string): string {
   return join(root, '.latex-preview', FILE);
 }
@@ -121,10 +125,17 @@ export async function listComments(root: string): Promise<Comment[]> {
   // can be hand-edited, written by an older version, or produced by an agent, so
   // returning it as Comment[] unchecked is a claim the type system cannot make —
   // and one missing `rects` was once enough to take down the whole PDF pane.
+  const comments: Comment[] = [];
+  let skipped = 0;
   for (const value of parsed) {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      throw new CommentStoreUnreadableError(path, new Error('every comment must be a JSON object'));
-    }
+    // One junk entry — a stray `null` left by a hand edit, an agent that wrote a
+    // bare string — used to throw, and every comment route reads through here,
+    // so the whole feature went down over an item nobody could see. What is
+    // dropped here is only a value that cannot be a comment at all, so it holds
+    // nothing to lose; the next real write simply stops carrying it. A file that
+    // will not parse, or is not an array, is still refused: that one might be a
+    // whole store of comments, and guessing at it is how they get destroyed.
+    if (!value || typeof value !== 'object' || Array.isArray(value)) { skipped++; continue; }
     const c = value as Comment;
     if ((c.status as string) === 'pending') c.status = 'accepted'; // pre-rename files
     if (!Array.isArray(c.rects)) c.rects = [];
@@ -138,8 +149,15 @@ export async function listComments(root: string): Promise<Comment[]> {
     if (c.sourceLine !== undefined && (!Number.isInteger(c.sourceLine) || c.sourceLine < 1)) delete c.sourceLine;
     if (c.verifiedCheckpoint !== undefined && typeof c.verifiedCheckpoint !== 'string') delete c.verifiedCheckpoint;
     if (c.verifiedAt !== undefined && typeof c.verifiedAt !== 'string') delete c.verifiedAt;
+    comments.push(c);
   }
-  return parsed as Comment[];
+  // No caller has anywhere to put a count, and this runs on every read, so say
+  // it once per store rather than on every poll.
+  if (skipped && !warnedAboutSkipped.has(path)) {
+    warnedAboutSkipped.add(path);
+    console.warn(`TeXChronicle skipped ${skipped} malformed entr${skipped === 1 ? 'y' : 'ies'} in ${path}; the rest of the comments are intact.`);
+  }
+  return comments;
 }
 
 // Atomic write (temp file + rename): a concurrent listComments() from another

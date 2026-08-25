@@ -31,6 +31,12 @@ export type ProjectInstance = OwnedProjectInstance | ExistingProjectInstance;
 
 const STARTUP_WAIT_MS = 10_000;
 const POLL_MS = 100;
+// Long enough for a loaded machine's loopback round trip, short enough that a
+// user staring at a launcher that will not open does not give up first.
+const URL_PROBE_MS = 1_500;
+/** How many dead records to reclaim before slowing down. A record we delete and
+ *  another process immediately recreates is a fight, not a stale file. */
+const DEAD_RECORD_LIMIT = 3;
 
 function machineId(): string {
   const user = process.env.USERNAME ?? process.env.USER ?? 'user';
@@ -41,8 +47,31 @@ export function projectInstancePath(root: string): string {
   return join(root, '.latex-preview', 'instances', `${machineId()}.json`);
 }
 
+/** Is that process still running?
+ *
+ * EPERM means the opposite of what the old `catch → false` read into it: the
+ * process is there, we simply may not signal it — it belongs to another user,
+ * or was started elevated. Answering "dead" to that let an ordinary launch
+ * delete the ownership record of a workspace that was very much alive and open
+ * a second server on the same project. */
 function isAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch { return false; }
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
+}
+
+/** Is anything actually answering at that address? Any HTTP reply counts — the
+ *  question is whether a server is there, not what it thinks of the request. */
+async function serverAnswers(url: string): Promise<boolean> {
+  const stop = new AbortController();
+  const timer = setTimeout(() => stop.abort(), URL_PROBE_MS);
+  try {
+    await fetch(url, { signal: stop.signal, redirect: 'manual' });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function readRecord(path: string): Promise<InstanceRecord | null> {
@@ -70,6 +99,7 @@ export async function acquireProjectInstance(root: string): Promise<ProjectInsta
   };
 
   const deadline = Date.now() + STARTUP_WAIT_MS;
+  let deadRecordsCleared = 0;
   for (;;) {
     try {
       const handle = await open(path, 'wx');
@@ -93,7 +123,18 @@ export async function acquireProjectInstance(root: string): Promise<ProjectInsta
       await rm(path, { force: true }).catch(() => {});
       continue;
     }
-    if (current?.url) return { owned: false, pid: current.pid, url: current.url };
+    if (current?.url) {
+      // A recorded URL used to be taken as proof on its own. It is not: a hard
+      // kill (Task Manager, a closed terminal, a crash) leaves the record
+      // behind, and the PID in it can even have been handed to something else
+      // by then. Every later launch then announced "this project is already
+      // open", opened a browser tab at an address nothing was listening on, and
+      // exited — with no way to get the workspace back short of finding and
+      // deleting a file inside .latex-preview. Ask the address itself.
+      if (await serverAnswers(current.url)) return { owned: false, pid: current.pid, url: current.url };
+      await rm(path, { force: true }).catch(() => {});
+      if (++deadRecordsCleared < DEAD_RECORD_LIMIT) continue;
+    }
     if (Date.now() >= deadline) {
       // A live owner that has not published a URL is still starting or wedged;
       // do not race it. The message in standalone tells the user what happened.

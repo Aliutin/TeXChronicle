@@ -17,10 +17,36 @@ import { findSourceLine, phrase, stripLatex } from '../sync';
 import { FileTree } from './FileTree';
 import { LivePreview, type LiveSourceEdit } from './LivePreview';
 import { AssetPreview, type AssetSelection } from './AssetPreview';
-import { saveFile, type Status } from '../api';
+import { ConflictError, loadFile, saveFile, type Status } from '../api';
 
 const LIVE_DEBOUNCE_MS = 1200; // Live mode: recompile this long after you stop typing
 const AUTOSAVE_MS = 30000;      // safety net: persist edits (no recompile) every 30s
+const CONFLICT_MESSAGE =
+  'This file changed on disk (an agent or another editor saved it) while you had unsaved edits. '
+  + 'Copy your changes, then Reload to see the new version.';
+
+/** The line ending a file arrived with. Decided when the file is READ, never
+ * derived from the buffer afterwards, so typing can never flip it.
+ *
+ * Everything above the disk works in \n — CodeMirror's document, the Live
+ * preview's offsets, every splice. CodeMirror cannot be talked out of this:
+ * `Text.toString()` joins with \n whatever `lineSeparator` says, and feeding
+ * the wrapper a \r\n `value` makes it replace the whole document on every
+ * render. So the separator is restored at the one place it matters, the write.
+ * Without that, one keystroke in a CRLF file rewrote every line ending in it
+ * and the whole file landed in the next git diff. */
+function lineSeparatorOf(text: string): string {
+  return /\r\n/.test(text) ? '\r\n' : '\n';
+}
+
+// `\r?` too: a lone CR from a classic-Mac file would otherwise reach CodeMirror,
+// which splits on it anyway, and every comparison against the buffer after that
+// is against a string the editor no longer holds.
+const toEditorText = (text: string): string => text.replace(/\r\n?/g, '\n');
+const toDiskText = (text: string, separator: string): string => (
+  separator === '\n' ? text : text.replace(/\n/g, separator)
+);
+
 interface SyncTarget { text: string; nonce: number; file?: string; line?: number; column?: number }
 export type SourceMode = 'code' | 'visual';
 
@@ -111,6 +137,16 @@ export function SourcePanel({
   // to which file, so a buffer could be discarded on a switch, or applied to the
   // wrong file, or declared saved when it was not.
   const parked = useRef<Map<string, string>>(new Map());
+  // The version of each file this tab last saw on disk, and the line ending it
+  // came with. Both belong to the READ, not to the buffer.
+  const etags = useRef<Map<string, string>>(new Map());
+  const separators = useRef<Map<string, string>>(new Map());
+  // The path whose last save was refused because disk had moved on. While this
+  // stands, nothing writes to that file on a timer — an autosave every 30s
+  // against a 409 is a retry loop that can only ever fail.
+  const [conflict, setConflict] = useState<string | null>(null);
+  const conflictRef = useRef<string | null>(null);
+  conflictRef.current = conflict;
   const [dirtyPaths, setDirtyPaths] = useState<Set<string>>(new Set());
   const pendingJump = useRef<{ path: string; line: number } | null>(null);
   // File reads can finish out of order (especially when a PDF click changes the
@@ -126,6 +162,15 @@ export function SourcePanel({
     else if (active) s.delete(active);
     return s;
   }, [dirtyPaths, dirty, active]);
+
+  // Everything a read tells us about the file itself. A server too old to send
+  // an ETag leaves nothing stored, and every later save on that path stays
+  // unconditional — exactly today's behaviour, rather than a permanent 409.
+  const rememberRead = useCallback((path: string, loaded: { content: string; etag: string | null }) => {
+    if (loaded.etag) etags.current.set(path, loaded.etag);
+    else etags.current.delete(path);
+    separators.current.set(path, lineSeparatorOf(loaded.content));
+  }, []);
 
   const openFile = useCallback(async (path: string) => {
     const request = ++openRequest.current;
@@ -155,24 +200,21 @@ export function SourcePanel({
     }
 
     try {
-      const r = await fetch(`/api/file?path=${encodeURIComponent(path)}`);
-      if (!r.ok) {
-        const detail = await r.text();
-        if (request === openRequest.current) setLoadError(`Couldn't load ${path}: ${detail}`);
-        return;
-      }
-      const text = await r.text();
+      const loaded = await loadFile(path);
       if (request !== openRequest.current) return;
+      const text = toEditorText(loaded.content);
       cache.current.set(path, text);
+      rememberRead(path, loaded);
       setActive(path);
       setContent(text);
       setDirty(false);
       setSaveState('idle');
       setLoadError(null);
+      setConflict((c) => (c === path ? null : c));
     } catch (e) {
-      if (request === openRequest.current) setLoadError(`Couldn't load ${path}: ${String(e)}`);
+      if (request === openRequest.current) setLoadError(`Couldn't load ${path}: ${e instanceof Error ? e.message : String(e)}`);
     }
-  }, []);
+  }, [rememberRead]);
 
   const openAsset = useCallback((selection: AssetSelection) => {
     // An asset replaces only the visible editor surface. Keep the source buffer
@@ -223,10 +265,9 @@ export function SourcePanel({
     cache.current.clear();
     const path = activeRef.current;
     if (!path || dirtyRef.current) return;
-    fetch(`/api/file?path=${encodeURIComponent(path)}`)
-      .then((r) => (r.ok ? r.text() : null))
-      .then((text) => {
-        if (text === null) return;
+    loadFile(path)
+      .then((loaded) => {
+        const text = toEditorText(loaded.content);
         cache.current.set(path, text);
         // Only into the file it was fetched FOR. This request outlives a click:
         // it started for main.tex, the user opened intro.tex before it resolved,
@@ -235,10 +276,14 @@ export function SourcePanel({
         // autosave after one keystroke, saved it over intro.tex and then
         // compiled and checkpointed the wreckage.
         if (activeRef.current !== path) return;
+        // The buffer is clean, so this read is now the version this tab holds:
+        // adopt its ETag, or the next save would be conditional on a version
+        // that is two edits old and 409 against text nobody disagrees with.
+        rememberRead(path, loaded);
         if (text !== contentRef.current && !dirtyRef.current) setContent(text);
       })
       .catch(() => {});
-  }, [reloadTick]);
+  }, [reloadTick, rememberRead]);
 
   // Unsaved text lives only in this tab. The browser's own prompt is the last
   // thing standing between a stray Cmd-W and someone's afternoon.
@@ -254,9 +299,17 @@ export function SourcePanel({
 
   // Save the open file. `compile` true → also recompile (Ctrl+S / Save / Live);
   // false → a bare safety save that leaves the PDF untouched.
-  const save = useCallback(async (compile: boolean) => {
+  const save = useCallback(async (compile: boolean, automatic = false) => {
     const path = activeRef.current;
     if (!path) return;
+    // A conflict stands until a person resolves it. Timers must not push at it:
+    // the Live debounce would re-PUT 1.2s later and the autosave every 30s
+    // after that, each one refused, none of them telling anyone anything new.
+    if (automatic && conflictRef.current === path) return;
+    // An explicit Save after the banner has been read is a deliberate choice to
+    // let this buffer win, so it goes out unconditionally.
+    const overwrite = conflictRef.current === path;
+    if (overwrite) etags.current.delete(path);
     setSaveState('saving');
     if (compile) seqAtSave.current = seqRef.current;
     try {
@@ -268,7 +321,18 @@ export function SourcePanel({
       // Snapshot what is actually being written. Reading contentRef again after
       // the await describes a buffer that may have moved on.
       const written = contentRef.current;
-      await saveFile(path, written, compile);
+      const nextEtag = await saveFile(
+        path,
+        toDiskText(written, separators.current.get(path) ?? '\n'),
+        compile,
+        etags.current.get(path) ?? null,
+      );
+      // Adopt the version the write produced. A server that answers without the
+      // header gets no If-Match from us next time either — falling back to
+      // today's unconditional write rather than 409ing against nothing.
+      if (nextEtag) etags.current.set(path, nextEtag);
+      else etags.current.delete(path);
+      if (overwrite) setConflict((c) => (c === path ? null : c));
       cache.current.set(path, written);
 
       // Only clear the flag if nothing was typed while the request was in
@@ -292,10 +356,41 @@ export function SourcePanel({
         setSaveState('idle');
       }
     } catch (e) {
+      if (e instanceof ConflictError) {
+        // Nothing was written, and nothing here rewrites the buffer: the user's
+        // text is still the only copy of their edit and stays on screen.
+        setConflict(path);
+        setDirty(true);
+        setSaveState('error');
+        setSaveError(CONFLICT_MESSAGE);
+        return;
+      }
       setSaveState('error');
       setSaveError(e instanceof Error ? e.message : 'save failed');
     }
   }, []);
+
+  /** Throw the buffer away for what is on disk now. The only exit from a
+   * conflict that does not overwrite somebody. */
+  const reloadFromDisk = useCallback(async (path: string) => {
+    try {
+      const loaded = await loadFile(path);
+      rememberRead(path, loaded);
+      parked.current.delete(path);
+      setDirtyPaths((s) => { const n = new Set(s); n.delete(path); return n; });
+      if (activeRef.current !== path) return;
+      const text = toEditorText(loaded.content);
+      cache.current.set(path, text);
+      contentRef.current = text;
+      setContent(text);
+      setDirty(false);
+      setConflict(null);
+      setSaveState('idle');
+      setSaveError(null);
+    } catch (e) {
+      setLoadError(`Couldn't reload ${path}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, [rememberRead]);
 
   // A compiling chip is cleared by the compile finishing — never by a clock.
   //
@@ -342,7 +437,7 @@ export function SourcePanel({
     // Live mode recompiles a short while after you stop typing (Typst-style).
     if (liveRef.current) {
       if (autoTimer.current) clearTimeout(autoTimer.current);
-      autoTimer.current = setTimeout(() => { void save(true); }, LIVE_DEBOUNCE_MS);
+      autoTimer.current = setTimeout(() => { void save(true, true); }, LIVE_DEBOUNCE_MS);
     }
   }, [save]);
 
@@ -376,7 +471,7 @@ export function SourcePanel({
   // 30s only produces a stream of failures behind an editor that looks fine.
   useEffect(() => {
     if (dead) return;
-    const iv = setInterval(() => { if (dirtyRef.current && !liveRef.current) void save(false); }, AUTOSAVE_MS);
+    const iv = setInterval(() => { if (dirtyRef.current && !liveRef.current) void save(false, true); }, AUTOSAVE_MS);
     return () => clearInterval(iv);
   }, [save, dead]);
 
@@ -555,6 +650,15 @@ export function SourcePanel({
       />
       <div className="source-editor-pane">
         {loadError && <div className="panel-hint load-error">{loadError}</div>}
+        {/* Nothing was written when this appears, and nothing here rewrites the
+            buffer. The user's unsaved text stays on screen while they decide. */}
+        {conflict && conflict === active && (
+          <div className="panel-hint load-error save-conflict" role="alert">
+            <span>{CONFLICT_MESSAGE}</span>
+            <button onClick={() => void reloadFromDisk(conflict)} title="Discard this buffer and load what is on disk now">Reload</button>
+            <button onClick={() => setConflict(null)} title="Hide this message and keep your unsaved text">Dismiss</button>
+          </div>
+        )}
         {activeAsset ? (
           <AssetPreview
             selection={activeAsset}
@@ -571,7 +675,13 @@ export function SourcePanel({
                   <span className={`save-state save-${saveState}`} title={saveError ?? undefined}>{saveStateText}</span>
                   <span className="live-edit-hint">Click prose to edit</span>
                   <button onClick={() => editFromPreview()} title="Edit exact LaTeX commands and protected constructs">Edit Code</button>
-                  <button onClick={() => void save(true)} disabled={!dirty && saveState !== 'error'} title="Save source and compile the exact PDF">Save &amp; compile</button>
+                  <button
+                    onClick={() => void save(true)}
+                    disabled={!dirty && saveState !== 'error'}
+                    title={conflict === active
+                      ? 'This file changed on disk. Saving now overwrites that newer version with your text.'
+                      : 'Save source and compile the exact PDF'}
+                  >Save &amp; compile</button>
                 </div>
                 <LivePreview
                   source={content}
@@ -611,7 +721,13 @@ export function SourcePanel({
                 >
                   ⚡ Auto PDF
                 </button>
-                <button onClick={() => void save(true)} disabled={!dirty && saveState !== 'error'} title="Save and recompile (Ctrl+S)">Save</button>
+                <button
+                  onClick={() => void save(true)}
+                  disabled={!dirty && saveState !== 'error'}
+                  title={conflict === active
+                    ? 'This file changed on disk. Saving now overwrites that newer version with your text.'
+                    : 'Save and recompile (Ctrl+S)'}
+                >Save</button>
               </div>
               <div className="format-bar">
                 <button title="Undo (Ctrl+Z)" onClick={() => { const v = cmRef.current?.view; if (v) { undo(v); v.focus(); } }}>↶</button>

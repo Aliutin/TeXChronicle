@@ -18,7 +18,7 @@ import { diffViewHtml } from './diffViewPage.js';
 import { canTrackHistory, historyStatus, listCheckpoints, getCheckpointDiff, getWorkingDiff, restoreCheckpoint, restoreFile, matchingCheckpointSha } from '../git/checkpoints.js';
 import { listSectionHistory, getSectionDiff, restoreSection } from '../git/sectionHistory.js';
 import { readRenderArtifact } from '../git/renderArtifacts.js';
-import { listTextFiles, readTextFile, writeTextFile, listTree, createTextFile, createDir, renameEntry, deleteEntry, writeUpload, resolveAssetFile, resolveIncludeFile } from './filesApi.js';
+import { listTextFiles, readTextFileWithEtag, writeTextFile, listTree, createTextFile, createDir, renameEntry, deleteEntry, writeUpload, resolveAssetFile, resolveIncludeFile } from './filesApi.js';
 import { suppressNextChange } from '../watch/fileWatcher.js';
 import { listComments, addComment, updateComment, deleteComment, addReply, markCommentsForRestoreReview, type RestoreScope } from './commentsStore.js';
 import { findAnchor } from './anchorMatch.js';
@@ -368,8 +368,13 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
           if (input.status === 'resolved' || input.restoreReview === null) {
             const current = await matchingCheckpointSha(root);
             if (!current.sha || current.dirty || compileState !== 'ok' || latestPdfCheckpoint !== current.sha) {
+              // Not "wait": nothing is coming. The editor's plain save suppresses
+              // the watcher (see /api/file above), so after an autosave there is
+              // no compile pending and this state never resolves on its own —
+              // the old message left people watching a spinner that did not
+              // exist. Name the one action that clears it.
               res.writeHead(409, ISOLATION_HEADERS).end(
-                'The current source is not the clean checkpoint shown in the PDF. Wait for a successful recompile before resolving or verifying this comment.',
+                'The source on disk has not been rendered since it was last saved (a plain editor autosave does not compile). Recompile — Ctrl+S / Recompile in the workspace, or render_preview from an agent — then resolve this comment again.',
               );
               return;
             }
@@ -533,19 +538,44 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
         if (req.method === 'PUT') {
           const chunks: Buffer[] = [];
           for await (const c of req) chunks.push(c as Buffer);
-          // Suppress the watcher for our own write, then recompile only when the
-          // caller asked (?compile=1 — Ctrl+S / Save). A bare save doesn't compile.
-          suppressNextChange(join(getProjectRoot(), rel));
-          await writeTextFile(getProjectRoot(), rel, Buffer.concat(chunks).toString('utf8'));
+          // If-Match carries the ETag the editor loaded. Present and stale means
+          // someone else has saved this file since — refuse rather than flatten
+          // their change. Absent keeps the historical unconditional save.
+          const ifMatch = req.headers['if-match'];
+          const written = await writeTextFile(getProjectRoot(), rel, Buffer.concat(chunks).toString('utf8'), {
+            ...(typeof ifMatch === 'string' ? { ifMatch } : {}),
+            // Suppress the watcher for our own write — but only once the write
+            // is certain, so a refused save does not leave the next external
+            // change to this file swallowed.
+            beforeWrite: () => suppressNextChange(join(getProjectRoot(), rel)),
+          });
+          // Recompile only when the caller asked (?compile=1 — Ctrl+S / Save).
+          // A bare save doesn't compile.
           if (reqUrl.searchParams.get('compile') === '1') {
             const { requestCompile } = await import('../coordinator.js');
             requestCompile().catch(() => {});
           }
-          return json(res, { ok: true });
+          res.writeHead(200, {
+            'Content-Type': 'application/json', 'Cache-Control': 'no-store',
+            ETag: `"${written.etag}"`, ...ISOLATION_HEADERS,
+          });
+          res.end(JSON.stringify({ ok: true, etag: written.etag }));
+          return;
         }
-        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', ...ISOLATION_HEADERS });
-        res.end(await readTextFile(getProjectRoot(), rel)); return;
+        // Read before the header goes out: a non-UTF-8 file is now a refusal,
+        // and a 200 already on the wire cannot be turned into a 400.
+        const file = await readTextFileWithEtag(getProjectRoot(), rel);
+        res.writeHead(200, {
+          'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store',
+          ETag: `"${file.etag}"`, ...ISOLATION_HEADERS,
+        });
+        res.end(file.content); return;
       } catch (e) {
+        if ((e as Error).name === 'FileChangedOnDiskError') {
+          res.writeHead(409, { 'Content-Type': 'text/plain; charset=utf-8', ...ISOLATION_HEADERS })
+            .end((e as Error).message);
+          return;
+        }
         res.writeHead(400, ISOLATION_HEADERS).end(String((e as Error).message)); return;
       }
     }

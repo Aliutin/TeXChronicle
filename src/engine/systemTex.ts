@@ -5,7 +5,7 @@
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { promisify } from 'node:util';
-import { access, readFile, mkdir, rm } from 'node:fs/promises';
+import { access, readdir, readFile, mkdir, rm, stat } from 'node:fs/promises';
 import { basename, delimiter, dirname, join } from 'node:path';
 import type { CompileOutput } from './browserHost.js';
 import type { Engine } from '../project/compileProject.js';
@@ -107,6 +107,58 @@ async function windowsLatexmkLaunches(): Promise<LatexmkLaunch[]> {
     }
   }
   return launches;
+}
+
+/**
+ * Where a Unix TeX lives when it is not on the PATH we inherited.
+ *
+ * A GUI-launched MCP client on macOS hands its children `/usr/bin:/bin` and
+ * nothing else — no login shell has run, so MacTeX's `/Library/TeX/texbin` is
+ * never on it. The user has a full TeX Live and is told there is no local TeX,
+ * which is the same lie the Windows branch above exists to prevent, on the
+ * platform where it is most likely: TeXChronicle is normally started by an app,
+ * not from a terminal.
+ *
+ * The filesystem lookups are injected so this can be exercised on a machine that
+ * has none of these directories.
+ */
+export async function posixLatexmkCandidates(deps: {
+  exists: (path: string) => Promise<boolean>;
+  listDir: (path: string) => Promise<string[]>;
+}): Promise<string[]> {
+  const found: string[] = [];
+  const consider = async (path: string) => { if (await deps.exists(path)) found.push(path); };
+
+  // MacTeX's symlink farm — the canonical answer on macOS, and stable across
+  // TeX Live years, so it goes first.
+  await consider('/Library/TeX/texbin/latexmk');
+  // A versioned TeX Live tree: the year and the architecture directory are both
+  // unknowable ahead of time, so they are listed rather than guessed.
+  for (const base of ['/usr/local/texlive', '/opt/texlive']) {
+    for (const year of (await deps.listDir(base)).sort().reverse()) {
+      for (const arch of await deps.listDir(`${base}/${year}/bin`)) {
+        await consider(`${base}/${year}/bin/${arch}/latexmk`);
+      }
+    }
+  }
+  await consider('/opt/homebrew/bin/latexmk'); // Apple-silicon Homebrew
+  await consider('/usr/local/bin/latexmk');    // Intel Homebrew, and manual installs
+  return [...new Set(found)];
+}
+
+async function posixLatexmkLaunches(): Promise<LatexmkLaunch[]> {
+  if (process.platform === 'win32') return [];
+  const candidates = await posixLatexmkCandidates({
+    exists,
+    listDir: (path) => readdir(path).catch(() => []),
+  });
+  // The directory goes on PATH as well: latexmk shells out to xelatex, bibtex
+  // and friends by bare name, and finding latexmk without them is no use.
+  return candidates.map((command) => ({
+    command,
+    prefixArgs: [],
+    env: childEnvWithPath([dirname(command)]),
+  }));
 }
 
 /**
@@ -217,7 +269,7 @@ export async function probeSystemTex(): Promise<SystemTexProbe> {
   // A positive result is kept: TeX does not uninstall itself mid-session, and
   // re-probing before every compile would spawn a process for nothing.
   if (probe?.usable) return probe;
-  const launches = [pathLaunch(), ...(await windowsLatexmkLaunches())];
+  const launches = [pathLaunch(), ...(await windowsLatexmkLaunches()), ...(await posixLatexmkLaunches())];
   let failure: (NodeJS.ErrnoException & { stdout?: string; stderr?: string }) | undefined;
   for (const launch of launches) {
     try {
@@ -369,6 +421,14 @@ export function systemLatexmkArgs(
 ): string[] {
   return [
     ENGINE_FLAG[engine] ?? '-pdf', '-synctex=1', '-interaction=nonstopmode', '-file-line-error',
+    // Compile from the main file's own directory, the way every TeX editor does.
+    // `paper/main.tex` containing `\input{sections/body}` means `paper/sections`,
+    // not `<root>/sections` — without -cd latexmk ran from the project root and
+    // the document died on "File `sections/body.tex' not found". The WASM path
+    // already chdirs, so the two backends disagreed about the same project.
+    // -outdir stays absolute (systemBuildDir joins from the project root), so
+    // artifacts still land in this process's private build directory.
+    '-cd',
     // Some MiKTeX installations return 1 for a recoverable first pass (for
     // example its "updates not checked" major warning). Without -f latexmk
     // stops before the bibliography/reference reruns and leaves a smaller,
@@ -453,6 +513,8 @@ export async function compileWithSystemTex(root: string, mainRelPath: string, en
   const outdir = systemBuildDir(root);
   await mkdir(outdir, { recursive: true });
   ownedBuildDirs.add(outdir);
+  // Once per compile, and never for the directory this compile is about to use.
+  await sweepStaleBuildDirs(root, outdir);
   const stem = basename(mainRelPath).replace(/\.tex$/i, '');
   const pdfPath = join(outdir, stem + '.pdf');
   const syncPath = join(outdir, stem + '.synctex.gz');
@@ -492,18 +554,108 @@ export async function compileWithSystemTex(root: string, mainRelPath: string, en
     };
   }
 
-  if (code === 0) {
-    try {
-      const pdf = new Uint8Array(await readFile(pdfPath));
-      // A PDF remains useful even if an unusual TeX installation did not emit
-      // SyncTeX. The viewer will transparently retain its text-match fallback.
-      const syncTex = await readFile(syncPath).then((b) => new Uint8Array(b), () => undefined);
-      return { success: true, exitCode: 0, pdf, syncTex, pdfLen: pdf.length, log: out, ms: Date.now() - started };
-    } catch {
-      return { success: false, exitCode: 0, pdf: undefined, pdfLen: 0, log: out, ms: Date.now() - started, error: 'latexmk reported success but wrote no PDF' };
-    }
+  // Read whatever this run wrote, whatever the exit status was — see
+  // `systemTexResult` for why the two are not the same question.
+  const pdf = await readIfFresh(pdfPath, started);
+  // A PDF remains useful even if an unusual TeX installation did not emit
+  // SyncTeX. The viewer will transparently retain its text-match fallback.
+  const syncTex = await readIfFresh(syncPath, started);
+  return systemTexResult(code, out, Date.now() - started, { pdf, syncTex });
+}
+
+/**
+ * A file only counts when this run produced it. The build directory is reused
+ * for every compile in a process, so yesterday's PDF is sitting there waiting to
+ * be mistaken for today's — and showing the previous render as if it were the
+ * current one is exactly the failure the log classifier exists to prevent. The
+ * second of slack absorbs filesystem timestamp granularity.
+ */
+async function readIfFresh(path: string, since: number): Promise<Uint8Array | undefined> {
+  const info = await stat(path).catch(() => null);
+  if (!info || info.mtimeMs < since - 1000) return undefined;
+  return readFile(path).then((b) => new Uint8Array(b), () => undefined);
+}
+
+/**
+ * Turn a finished latexmk run into a result. Pure, so the rules below can be
+ * tested without a TeX installation.
+ *
+ * The rule that changed: latexmk exits 12 on any ordinary LaTeX error, even
+ * under `-f`, and even when every page typeset perfectly. Reading the PDF only
+ * on exit 0 meant one typo produced pdfLen=0 — so a paper that LaTeX had
+ * happily finished came back as "no output at all", and under `auto` the
+ * toolchain concluded the local TeX was broken and silently switched to the
+ * bundled engine. The exit code still decides `success`; it no longer decides
+ * whether output exists.
+ */
+export function systemTexResult(
+  code: number | null,
+  log: string,
+  ms: number,
+  artifacts: { pdf?: Uint8Array; syncTex?: Uint8Array } = {},
+): CompileOutput {
+  const { pdf, syncTex } = artifacts;
+  const exitCode = code ?? 1;
+  if (pdf) {
+    return {
+      success: code === 0,
+      exitCode,
+      pdf,
+      syncTex,
+      pdfLen: pdf.length,
+      log,
+      ms,
+      // Explanatory, not alarming: the pages are there. Callers classify the log
+      // to decide whether this PDF is worth showing.
+      ...(code === 0 ? {} : { error: `latexmk exited ${exitCode}, but LaTeX still wrote a PDF — this is what an ordinary error in the source looks like. The pages are here; the errors from the log are listed with them.` }),
+    };
   }
-  return { success: false, exitCode: code ?? 1, pdf: undefined, pdfLen: 0, log: out, ms: Date.now() - started, error: 'system latexmk compile failed' };
+  return {
+    success: false,
+    exitCode: code === 0 ? 0 : exitCode,
+    pdf: undefined,
+    pdfLen: 0,
+    log,
+    ms,
+    error: code === 0 ? 'latexmk reported success but wrote no PDF' : 'system latexmk compile failed',
+  };
+}
+
+/**
+ * Remove build directories left by TeXChronicle processes that are gone.
+ *
+ * Each process gets `.latex-preview/build/<pid>-<session>` so two of them cannot
+ * race on the same aux files, and `stopSystemTex` removes its own on a graceful
+ * exit. Nothing removed them after a crash, a taskkill, or a closed terminal —
+ * so a project accumulated one abandoned directory per hard stop, each holding a
+ * full PDF and the whole aux set, forever. A directory whose PID is no longer
+ * running cannot be in use by anyone.
+ */
+export async function sweepStaleBuildDirs(root: string, keep?: string): Promise<void> {
+  const buildRoot = join(root, '.latex-preview', 'build');
+  const entries = await readdir(buildRoot, { withFileTypes: true }).catch(() => []);
+  await Promise.all(entries.map(async (entry) => {
+    if (!entry.isDirectory()) return;
+    const pid = /^(\d+)-[0-9a-f]+$/.exec(entry.name)?.[1];
+    if (!pid) return;
+    const full = join(buildRoot, entry.name);
+    if (keep && full === keep) return;
+    if (isProcessAlive(Number(pid))) return;
+    await rm(full, { recursive: true, force: true }).catch(() => {});
+  }));
+}
+
+/** Signal 0 asks the OS whether a PID exists without touching the process.
+ *  EPERM means it exists and belongs to someone else — still alive, and not
+ *  ours to delete underneath. */
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  }
 }
 
 /** Run latexmk, collecting output and watching for silence. Resolves rather than

@@ -34,7 +34,13 @@ if (isBelowFloor(process.versions.node, range)) {
   const { register } = await import('tsx/esm/api');
   register();
 
-  const command = process.argv[2];
+  const argument = process.argv[2];
+  // Anything starting with "-" is an option, not a subcommand. The help flags
+  // are answered below by their own branch; everything else falls through to the
+  // MCP server entry, which reads argv itself. Without this,
+  // `texchronicle --project /path/to/paper` — the documented way to tell the
+  // server which folder to preview — was rejected as "Unknown command".
+  const command = !argument || argument.startsWith('-') ? undefined : argument;
   if (command === 'preview' || command === 'open') {
     await import(new URL('../src/standalone.ts', import.meta.url).href);
   } else if (command === 'install-launcher') {
@@ -48,14 +54,18 @@ if (isBelowFloor(process.versions.node, range)) {
       console.error(`[TeXChronicle] ${String(error && error.message || error)}`);
       process.exitCode = 1;
     }
-  } else if (command === '--help' || command === '-h') {
+  } else if (argument === '--help' || argument === '-h') {
     console.log(`TeXChronicle — local LaTeX workspace and MCP server
 
 Usage:
   texchronicle preview [main.tex] [options]   Open the standalone editor
   texchronicle open [main.tex] [options]      Open Recent projects when omitted
   texchronicle install-launcher               Add one-click shortcuts (Windows)
-  texchronicle                                Start the MCP server on stdio
+  texchronicle [--project <dir>]              Start the MCP server on stdio
+
+The MCP server previews the folder it was started in. Override that with
+--project <dir> or the TEXCHRONICLE_PROJECT environment variable — some MCP
+clients start their servers from your home directory rather than the paper.
 
 Run "texchronicle preview --help" for standalone options.`);
   } else if (command) {

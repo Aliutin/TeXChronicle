@@ -16,7 +16,8 @@ import { listComments, updateComment, addComment, addReply } from './preview/com
 import { findAnchor } from './preview/anchorMatch.js';
 import { getPreview, peekPreview, captureDiff, shutdownEngine } from './engine/browserHost.js';
 import { setConfig, requestCompile } from './coordinator.js';
-import { setProjectRoot } from './session.js';
+import { getProjectRoot, setProjectRoot } from './session.js';
+import { assertKnownProject, assertLooksLikeProject, initialProjectRoot } from './projectRoot.js';
 import { startWatching, stopWatching } from './watch/fileWatcher.js';
 import { canTrackHistory, historyStatus, listCheckpoints, latestCheckpointSha, matchingCheckpointSha } from './git/checkpoints.js';
 import { type Engine, type Backend } from './project/compileProject.js';
@@ -43,28 +44,84 @@ const { version } = JSON.parse(readFileSync(join(PKG_ROOT, 'package.json'), 'utf
 const server = new McpServer({ name: 'texchronicle', version });
 // The React workspace is the primary UI; fall back to the legacy /viewer only
 // when ui/dist hasn't been built (e.g. a fresh clone before `npm run build:ui`).
-const hasWorkspace = existsSync(join(PKG_ROOT, 'ui', 'dist', 'index.html'));
+// Checked per render, not once at module load: a long-lived server that was
+// started before `npm run build:ui` used to keep serving the basic viewer for
+// the rest of its life, with the built workspace sitting right there on disk.
+const hasWorkspace = (): boolean => existsSync(join(PKG_ROOT, 'ui', 'dist', 'index.html'));
+const BUILD_UI_HELP = 'Workspace UI not built — showing the basic viewer. Run "npm run build:ui" in the TeXChronicle folder for the full workspace.';
+
+// Which folder this server previews. Set once at startup from --project, then
+// $TEXCHRONICLE_PROJECT, then cwd; the coordinator re-points it on each render.
+setProjectRoot(initialProjectRoot());
 
 let viewerOpened = false;
 // One-shot: the no-git note is worth saying, once.
 let historyWarned = false;
 
+// The index signature is what the SDK's CallToolResult wants; without it a
+// handler returning this union is rejected at registerTool().
+interface ToolError { [key: string]: unknown; isError: true; content: { type: 'text'; text: string }[] }
+const toolError = (message: string): ToolError =>
+  ({ isError: true, content: [{ type: 'text', text: `✖ ${message}` }] });
+
+// The root a render_preview already vouched for. Re-checking it on every tool
+// call would cost a stat per call and, worse, would reject the perfectly normal
+// project whose .tex files all live under src/ once render_preview had been
+// given its mainFile.
+let confirmedRoot: string | null = null;
+
+/**
+ * The project root for a tool that only reads, or an error explaining how to
+ * point at the paper.
+ *
+ * Guarding render_preview alone is not enough. list_checkpoints and every
+ * comment tool reach historyRepo(), and historyRepo() CREATES
+ * `.latex-preview/history.git` in whatever directory it is handed — so a client
+ * that starts the server in the user's home folder would have a Git store
+ * initialized there by the second tool call, having never compiled anything.
+ */
+async function checkedProjectRoot(): Promise<string | ToolError> {
+  const projectRoot = getProjectRoot();
+  if (projectRoot !== confirmedRoot) {
+    try {
+      await assertKnownProject(projectRoot);
+    } catch (err) {
+      return toolError(String((err as Error).message ?? err));
+    }
+    confirmedRoot = projectRoot;
+  }
+  setProjectRoot(projectRoot); // the diff/git endpoints read this
+  return projectRoot;
+}
+
 
 server.registerTool(RENDER_PREVIEW_NAME, renderPreviewConfig, async ({ mainFile, engine, backend, shellEscape }) => {
-  const projectRoot = process.cwd();
+  const projectRoot = getProjectRoot();
   try {
+    // Before anything that writes. startWatching() pins a recursive watcher to
+    // this root for the rest of the process (polling, on Windows), and the
+    // coordinator's prepareCheckpoint() creates .latex-preview/history.git
+    // inside it — both of which used to happen in whatever directory the client
+    // spawned us in, several steps before resolveMainFile said "no .tex files".
+    await assertLooksLikeProject(projectRoot, mainFile);
+    confirmedRoot = projectRoot;
+
     const preview = await getPreview();
     setConfig({ projectRoot, mainFile, engine: engine as Engine | undefined, backend: backend as Backend | undefined, shellEscape: shellEscape as boolean | undefined });
     startWatching(projectRoot); // passive live-reload for saves between tool calls
 
     const result = await requestCompile();
 
-    const workspaceUrl = hasWorkspace ? `${preview.url}/app` : preview.viewerUrl;
+    const workspace = hasWorkspace();
+    const workspaceUrl = workspace ? `${preview.url}/app` : preview.viewerUrl;
     // Open the workspace tab once per server lifetime.
     if (!viewerOpened) { viewerOpened = true; open(workspaceUrl).catch(() => {}); }
 
     if (result.success) {
-      const truncNote = result.truncated ? ' (note: project too large — some files were skipped)' : '';
+      // Only the bundled engine is handed the collected files, so only there does
+      // truncation mean something was left out of the compile; latexmk reads the
+      // directory itself and the cap merely bounds the file count we report.
+      const truncNote = result.truncated && result.backend === 'wasm' ? ' (note: project too large — some files were skipped)' : '';
       const errs = result.verdict?.errors.length ?? 0;
       // Say "with errors" when there were some. Reporting a clean ✓ over a
       // paper LaTeX only half-typeset is how a truncated PDF quietly replaced a
@@ -100,6 +157,11 @@ server.registerTool(RENDER_PREVIEW_NAME, renderPreviewConfig, async ({ mainFile,
           `Stubbed out ${result.stubbedPackages.map((p) => `\\usepackage{${p}}`).join(', ')} — not in the bundled TeX Live and unused here, so it no longer blocks the compile.`,
         );
       }
+      for (const note of result.notes ?? []) notes.push(note);
+      // A fresh git clone has no ui/dist, so the URL below opens the basic
+      // viewer. Unsaid, that reads as the whole product — and the reader has no
+      // reason to suspect a build step they were never told about.
+      if (!workspace) notes.push(BUILD_UI_HELP);
       if (errs) {
         notes.push(summarizeErrors(result.log || ''));
         // Only worth saying when system isn't what already ran — under the
@@ -139,9 +201,10 @@ server.registerTool(RENDER_PREVIEW_NAME, renderPreviewConfig, async ({ mainFile,
     const pkgHint = missingPkgs.length && result.backend !== 'system'
       ? `\n\n${missingPkgs.map((p) => `\`${p}\``).join(', ')} ${missingPkgs.length > 1 ? 'are' : 'is'} not in the bundled TeX Live subset, and the source really uses ${missingPkgs.length > 1 ? 'them' : 'it'} — so ${missingPkgs.length > 1 ? 'they cannot' : 'it cannot'} be stubbed out without rendering something different from what you wrote.\n\n${systemTexAdvice(result.systemTex, { packages: missingPkgs, fallback: result.systemFallback })}`
       : '';
+    const noteHint = result.notes?.length ? `\n\n${result.notes.join('\n\n')}` : '';
     return {
       isError: true,
-      content: [{ type: 'text', text: `✖ Compile of ${result.mainFile} failed (${result.engine}).\n\n${summarizeErrors(result.log || result.error || '')}${toolHint}${clsHint}${pkgHint}` }],
+      content: [{ type: 'text', text: `✖ Compile of ${result.mainFile} failed (${result.engine}).\n\n${summarizeErrors(result.log || result.error || '')}${toolHint}${clsHint}${pkgHint}${noteHint}` }],
     };
   } catch (err) {
     const msg = err instanceof MainFileError ? err.message : String((err as Error).message ?? err);
@@ -150,8 +213,8 @@ server.registerTool(RENDER_PREVIEW_NAME, renderPreviewConfig, async ({ mainFile,
 });
 
 server.registerTool(SHOW_DIFF_NAME, showDiffConfig, async ({ checkpoint }) => {
-  const projectRoot = process.cwd();
-  setProjectRoot(projectRoot); // the diff endpoints read this
+  const projectRoot = await checkedProjectRoot();
+  if (typeof projectRoot !== 'string') return projectRoot;
   try {
     await getPreview(); // ensure the preview server + headless browser are up
     if (!(await canTrackHistory(projectRoot))) {
@@ -174,8 +237,8 @@ server.registerTool(SHOW_DIFF_NAME, showDiffConfig, async ({ checkpoint }) => {
 });
 
 server.registerTool(LIST_CHECKPOINTS_NAME, listCheckpointsConfig, async ({ limit }) => {
-  const projectRoot = process.cwd();
-  setProjectRoot(projectRoot);
+  const projectRoot = await checkedProjectRoot();
+  if (typeof projectRoot !== 'string') return projectRoot;
   if (!(await canTrackHistory(projectRoot))) {
     return { content: [{ type: 'text', text: "History needs git, and none was found on PATH. Install it from https://git-scm.com/ and restart — no account or remote is involved; the history stays on this machine." }] };
   }
@@ -188,8 +251,8 @@ server.registerTool(LIST_CHECKPOINTS_NAME, listCheckpointsConfig, async ({ limit
 });
 
 server.registerTool(CHECK_COMMENTS_NAME, checkCommentsConfig, async ({ includeResolved }) => {
-  const projectRoot = process.cwd();
-  setProjectRoot(projectRoot);
+  const projectRoot = await checkedProjectRoot();
+  if (typeof projectRoot !== 'string') return projectRoot;
   const all = await listComments(projectRoot);
   const accepted = all.filter((c) => c.status === 'accepted');
   const resolved = all.filter((c) => c.status === 'resolved');
@@ -228,14 +291,16 @@ server.registerTool(CHECK_COMMENTS_NAME, checkCommentsConfig, async ({ includeRe
 });
 
 server.registerTool(RESOLVE_COMMENT_NAME, resolveCommentConfig, async ({ id, note }) => {
-  const projectRoot = process.cwd();
-  setProjectRoot(projectRoot);
+  const projectRoot = await checkedProjectRoot();
+  if (typeof projectRoot !== 'string') return projectRoot;
   const current = await matchingCheckpointSha(projectRoot);
   const shown = peekPreview()?.renderState();
   if (!current.sha || current.dirty || (shown && (shown.status !== 'ok' || shown.checkpoint !== current.sha))) {
     return {
       isError: true,
-      content: [{ type: 'text', text: '✖ This source is not the latest successful checkpoint yet. Wait for the current compile (or fix its error), then resolve the comment so its resolution is linked to the version that actually rendered.' }],
+      // Say what to do, not "wait": a plain editor autosave writes the file
+      // without compiling, so nothing is pending and waiting would never end.
+      content: [{ type: 'text', text: '✖ This source is not the latest successful checkpoint: the file on disk has not been rendered since it was last saved (a plain editor autosave does not compile, and a compile with errors does not count). Call render_preview to compile it — or have the author press Ctrl+S / Recompile in the workspace — then resolve this comment again so its resolution is linked to the version that actually rendered.' }],
     };
   }
   const updated = await updateComment(projectRoot, id, {
@@ -253,8 +318,8 @@ server.registerTool(RESOLVE_COMMENT_NAME, resolveCommentConfig, async ({ id, not
 });
 
 server.registerTool(ADD_COMMENT_NAME, addCommentConfig, async ({ quote, comment, role, page, accepted }) => {
-  const projectRoot = process.cwd();
-  setProjectRoot(projectRoot);
+  const projectRoot = await checkedProjectRoot();
+  if (typeof projectRoot !== 'string') return projectRoot;
   const anchor = await findAnchor(projectRoot, quote).catch(() => null);
   const created = await addComment(projectRoot, {
     page: page ?? 1,
@@ -274,8 +339,8 @@ server.registerTool(ADD_COMMENT_NAME, addCommentConfig, async ({ quote, comment,
 });
 
 server.registerTool(REPLY_COMMENT_NAME, replyCommentConfig, async ({ id, text, role }) => {
-  const projectRoot = process.cwd();
-  setProjectRoot(projectRoot);
+  const projectRoot = await checkedProjectRoot();
+  if (typeof projectRoot !== 'string') return projectRoot;
   const updated = await addReply(projectRoot, id, { by: role ?? 'author', text });
   if (!updated) return { isError: true, content: [{ type: 'text', text: `✖ Unknown comment id: ${id}` }] };
   try { peekPreview()?.broadcast({ type: 'comments-changed' }); } catch { /* no viewer */ }

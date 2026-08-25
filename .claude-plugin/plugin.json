@@ -1,7 +1,7 @@
 {
   "name": "texchronicle",
   "displayName": "TeXChronicle",
-  "version": "0.1.10",
+  "version": "0.1.12",
   "description": "TeXChronicle — a LaTeX workspace with editable live prose, exact PDF preview, anchored comments, and section-aware Git history.",
   "author": {
     "name": "Aliutin",

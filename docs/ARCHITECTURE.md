@@ -91,10 +91,18 @@ open is the React workspace with a lightweight `pdf.js` viewer — no WASM in it
   matches; a save during compilation therefore cannot mislabel a stale PDF. Cross-process
   serialization for shared state is `lock.ts`'s job, not this — the coordinator only
   owns the WASM engine, which is itself per-process.
-- `src/watch/fileWatcher.ts` — chokidar watcher for passive live-reload.
+- `src/watch/fileWatcher.ts` — chokidar watcher for passive live-reload. Watching
+  a different root re-targets it; it is idempotent only for the root already
+  being watched.
 - `src/session.ts` — the current project root, shared between the coordinator
   (which sets it) and the git/comments endpoints (which read it), without an
   import cycle.
+- `src/projectRoot.ts` — decides *which* folder that is (`--project`, then
+  `$TEXCHRONICLE_PROJECT`, then cwd) and guards it. Clients differ: Claude Code
+  and Codex spawn a server inside the project, others from the user's home
+  directory. The guard runs before the watcher starts and before the coordinator
+  can create `.latex-preview/history.git`, so a wrong root costs an error message
+  rather than a Git store in someone's home folder.
 
 ## Compile flow
 

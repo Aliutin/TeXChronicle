@@ -185,6 +185,13 @@ async function main(): Promise<void> {
 
   const preview = await getPreview();
   const hasWorkspace = existsSync(join(PKG_ROOT, 'ui', 'dist', 'index.html'));
+  // A fresh git clone has no ui/dist, and the basic viewer that stands in for it
+  // looks like the whole product unless we say so. Silence here is why "it opens
+  // but there is no editor or history" reads as a broken release rather than a
+  // build step nobody mentioned.
+  if (!hasWorkspace) {
+    console.log('[TeXChronicle] workspace UI not built — showing the basic viewer. Run "npm run build:ui" in the TeXChronicle folder for the full workspace.');
+  }
   const workspaceUrl = hasWorkspace ? `${preview.url}/app` : preview.viewerUrl;
   await ownedInstance.publish(workspaceUrl);
 
@@ -212,6 +219,8 @@ async function main(): Promise<void> {
     console.error(`[TeXChronicle] ✖ ${result.mainFile} failed to compile.`);
     console.error(summarizeErrors(result.log || result.error || ''));
   }
+
+  for (const note of result.notes ?? []) console.warn(`[TeXChronicle] ${note}`);
 
   if (parsed.values['exit-after-initial-compile']) {
     if (clean) console.log('[TeXChronicle] PORTABLE_SELF_TEST_OK');

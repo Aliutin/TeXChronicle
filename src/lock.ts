@@ -16,8 +16,17 @@ function lockPath(root: string, name: string): string {
   return join(root, '.latex-preview', name);
 }
 
-function isAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch { return false; }
+/** Is that process still running?
+ *
+ * Exported for the test that pins the EPERM case, which is the whole point of
+ * the `catch`: `process.kill(pid, 0)` throws ESRCH for "no such process" and
+ * EPERM for "it is there, you may not signal it" — another user's session, or
+ * an elevated one. Reading both as dead let an ordinary agent break a live
+ * lock and walk straight into the checkpoint critical section the lock exists
+ * to serialise. */
+export function isAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
 }
 
 /** Remove the lock file if its owner is dead or it's older than STALE_MS — a

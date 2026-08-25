@@ -150,6 +150,8 @@ const type = async (text) => {
 
 try {
   await page.goto(`${base}/app`, { waitUntil: 'load', timeout: 60_000 });
+  // The workspace opens on the PDF view; the editor lives behind the Code view.
+  await page.click('nav.workspace-nav button:has-text("Code")').catch(() => {});
   await page.click('.tabs button:has-text("Source")').catch(() => {});
   await page.waitForSelector('.cm-content', { timeout: 30_000 });
 

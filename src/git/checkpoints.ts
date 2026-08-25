@@ -5,8 +5,9 @@
 // Windows git in the spike.
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { extname, join, relative, sep } from 'node:path';
-import { readdir, rm } from 'node:fs/promises';
+import { extname, join, relative, resolve, sep } from 'node:path';
+import { readdir, rm, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { git, gitOrNull } from './exec.js';
 import { historyRepo, type HistoryMode } from './historyRepo.js';
 import { withLock } from '../lock.js';
@@ -84,13 +85,148 @@ export interface CheckpointPreparation {
   error?: string;
 }
 
+/**
+ * Did this `git add` fail only over files that were not there to be read?
+ *
+ * Measured against git 2.55 rather than guessed at — `LC_ALL=C` below keeps the
+ * wording stable:
+ *
+ *   a file that disappeared while the add was running
+ *     error: open("scratch.dat"): No such file or directory
+ *     error: unable to index file 'scratch.dat'
+ *   a path named on the command line that had already gone
+ *     fatal: pathspec 'scratch.dat' did not match any files
+ *   a file that IS there and cannot be read — the case that must still fail
+ *     error: open("figure.png"): Permission denied
+ *     error: unable to index file 'figure.png'
+ *
+ * The stated reason is the discriminator, never "is the file there now": a
+ * scratch file that an editor or a TeX run recreates a millisecond later is
+ * back by the time we could look, and the second line of each pair is
+ * identical either way. Warnings are ignored on purpose — under core.autocrlf
+ * every add prints one about a perfectly healthy file.
+ *
+ * Returns the vanished paths, or null when anything else went wrong.
+ */
+interface AddFailure { vanished: string[]; denied: string[] }
+
+/** git quotes a path with non-ASCII bytes C-style (\303\251) under LC_ALL=C. */
+function unquoteGitPath(quoted: string): string {
+  if (!quoted.includes('\\')) return quoted;
+  const bytes: number[] = [];
+  for (let i = 0; i < quoted.length; i++) {
+    if (quoted[i] !== '\\') { bytes.push(...Buffer.from(quoted[i], 'utf8')); continue; }
+    const oct = quoted.slice(i + 1, i + 4);
+    if (/^[0-7]{3}$/.test(oct)) { bytes.push(parseInt(oct, 8)); i += 3; continue; }
+    const next = quoted[i + 1];
+    bytes.push(...Buffer.from(next === 'n' ? '\n' : next === 't' ? '\t' : next, 'utf8'));
+    i += 1;
+  }
+  return Buffer.from(bytes).toString('utf8');
+}
+
+function classifyAddFailure(error: unknown): AddFailure | null {
+  const text = String((error as { stderr?: string })?.stderr || (error as Error)?.message || error);
+  const complaints = text.split(/\r?\n/).filter((line) => /^\s*(?:error|fatal):/.test(line));
+  if (!complaints.length) return null;
+  const vanished = new Set<string>();
+  const denied = new Set<string>();
+  for (const line of complaints) {
+    const opened = line.match(/open\("(.+)"\): No such file or directory\s*$/);
+    if (opened) { vanished.add(unquoteGitPath(opened[1])); continue; }
+    const pathspec = line.match(/pathspec '(.+)' did not match any files\s*$/);
+    if (pathspec) { vanished.add(unquoteGitPath(pathspec[1])); continue; }
+    // Windows: a file another process is still closing after deleting it
+    // answers open() with EACCES, not ENOENT. Which of the two it really was
+    // is decided by the caller, by looking again.
+    const locked = line.match(/open\("(.+)"\): Permission denied\s*$/);
+    if (locked) denied.add(unquoteGitPath(locked[1]));
+  }
+  for (const line of complaints) {
+    if (/No such file or directory\s*$/.test(line) || /did not match any files\s*$/.test(line) || /Permission denied\s*$/.test(line)) continue;
+    // "unable to index file" is only ever a second line about a failure already
+    // reported above. On its own, or about some other file, it is a real
+    // problem with the user's project and must not be swallowed.
+    const consequence = line.match(/unable to index file '(.+)'\s*$/);
+    if (consequence) {
+      const path = unquoteGitPath(consequence[1]);
+      if (vanished.has(path) || denied.has(path)) continue;
+    }
+    return null;
+  }
+  return vanished.size || denied.size ? { vanished: [...vanished], denied: [...denied] } : null;
+}
+
+const ADD_ATTEMPTS = 3;
+
+/**
+ * `git add` that survives a file disappearing while it runs.
+ *
+ * A path can be enumerated and gone microseconds later, and both happen
+ * constantly in a live project: editors save atomically (write `foo.tex.tmp`,
+ * rename over), TeX runs drop and delete scratch files, Dropbox shuffles its
+ * own. `git add` treats that as fatal and abandons the whole run, so ONE such
+ * file failed the entire checkpoint — history got a hole in it, the working
+ * diff came back empty, and resolve_comment answered 409 "dirty" for a tree
+ * nobody had touched. Measured under a temp file churning every 3 ms, 2 of 12
+ * checkpoints died this way.
+ *
+ * `--ignore-errors` keeps everything else in the index when one file cannot be
+ * read; retrying without the vanished paths covers the other shape of the same
+ * race, where git rejects the pathspec before indexing anything at all. An
+ * error that names a file which is STILL on disk — a figure locked by another
+ * application, a permissions problem — is never swallowed: that one is real,
+ * and a snapshot silently missing the user's file is exactly what must not
+ * happen here.
+ */
+async function addTolerantOfVanishing(
+  root: string,
+  prefix: string[],
+  paths: string[] | null,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  let batch = paths;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await git(root, batch === null ? prefix : [...prefix, ...batch], env);
+      return;
+    } catch (error) {
+      const failure = classifyAddFailure(error);
+      if (!failure) throw error;
+      // A "Permission denied" about a path that is gone now was a file caught
+      // mid-deletion (Windows keeps the name until the last handle closes); one
+      // that is still there gets another try once that handle has had time to
+      // close, and stays a real error if it still cannot be read — a locked
+      // figure must fail the snapshot, not silently drop out of it.
+      const stillThere = failure.denied.filter((path) => existsSync(join(root, path)));
+      const vanished = [...failure.vanished, ...failure.denied.filter((path) => !stillThere.includes(path))];
+      if (stillThere.length) {
+        if (attempt >= ADD_ATTEMPTS) throw error;
+        await new Promise((done) => setTimeout(done, 50 * attempt));
+        continue;
+      }
+      // A whole-tree add with --ignore-errors has already indexed everything
+      // that was still there, so there is nothing left to do about a file that
+      // was not — and nothing to retry.
+      if (batch === null) return;
+      const survivors = batch.filter((path) => !vanished.includes(path));
+      if (survivors.length === batch.length || attempt >= ADD_ATTEMPTS) throw error;
+      batch = survivors;
+      if (!batch.length) return;
+    }
+  }
+}
+
 /** Hash the working tree through a private index, without changing a ref. The
  * resulting tree object is immutable even if an editor saves again later. */
 async function writeCurrentTree(root: string, ENV: NodeJS.ProcessEnv): Promise<string> {
   const idx = join(tmpdir(), `latex-ckpt-${randomBytes(6).toString('hex')}.index`);
-  const env = { ...ENV, GIT_INDEX_FILE: idx };
+  // LC_ALL so git's diagnostics stay English: addTolerantOfVanishing has to
+  // tell an `error:` line from a `warning:` one to decide whether a failure was
+  // a vanished scratch file or a real problem with the user's paper.
+  const env = { ...ENV, GIT_INDEX_FILE: idx, LC_ALL: 'C' };
   try {
-    await git(root, ['add', '-A', ...EXCLUDE_TOOL], env);
+    await addTolerantOfVanishing(root, ['add', '-A', '--ignore-errors', ...EXCLUDE_TOOL], null, env);
     // A paper's own compiler inputs are part of the rendered version even when
     // the author's ordinary .gitignore hides them (generated .bib/.tex files
     // and figures are common examples). Force only TeX-relevant inputs into the
@@ -98,7 +234,7 @@ async function writeCurrentTree(root: string, ENV: NodeJS.ProcessEnv): Promise<s
     const forced = await collectForcedCompileInputs(root);
     // Stay below Windows' command-line length limit on figure-heavy projects.
     for (let at = 0; at < forced.length; at += 100) {
-      await git(root, ['add', '-f', '--', ...forced.slice(at, at + 100)], env);
+      await addTolerantOfVanishing(root, ['add', '-f', '--ignore-errors', '--'], forced.slice(at, at + 100), env);
     }
     // `git add -A` is deliberately broad so uncommon but real paper inputs
     // are recoverable. Remove only files we can identify as generated output:
@@ -167,12 +303,34 @@ export async function createCheckpoint(root: string): Promise<CheckpointResult> 
   });
 }
 
+/**
+ * The successful-render marker, seeding it from the timeline on first use.
+ *
+ * SUCCESS_REF is newer than the feature. A project whose history was written by
+ * an earlier release has REF and nothing else, so every reader of this marker
+ * answered "there has never been a successful render" — `latestCheckpointSha`
+ * returned undefined and `matchingCheckpointSha` reported the tree as dirty, so
+ * resolve_comment refused to work at all until the author happened to trigger a
+ * clean compile. Seeding is correct rather than merely convenient: before this
+ * marker existed a checkpoint was only ever written after a successful render,
+ * so the old tip IS the last known-good tree. Create-only (`update-ref` with an
+ * empty old value), so a concurrent process that seeds first simply wins.
+ */
+async function successCheckpointSha(root: string, ENV: NodeJS.ProcessEnv): Promise<string | undefined> {
+  const known = (await gitOrNull(root, ['rev-parse', '--verify', '-q', SUCCESS_REF], ENV))?.trim();
+  if (known) return known;
+  const tip = (await gitOrNull(root, ['rev-parse', '--verify', '-q', REF], ENV))?.trim();
+  if (!tip) return undefined;
+  await gitOrNull(root, ['update-ref', SUCCESS_REF, tip, ''], ENV);
+  return (await gitOrNull(root, ['rev-parse', '--verify', '-q', SUCCESS_REF], ENV))?.trim() || tip;
+}
+
 /** The tip of the successful-render history, whether or not files have since
  * changed. Useful for anchoring a comment created on the currently shown PDF. */
 export async function latestCheckpointSha(root: string): Promise<string | undefined> {
   const { env: ENV, mode } = await historyRepo(root);
   if (mode !== 'project' && mode !== 'shadow') return undefined;
-  return (await gitOrNull(root, ['rev-parse', '--verify', '-q', SUCCESS_REF], ENV))?.trim() || undefined;
+  return successCheckpointSha(root, ENV);
 }
 
 /** The latest checkpoint only when it describes the files on disk right now.
@@ -184,14 +342,23 @@ export async function matchingCheckpointSha(root: string): Promise<{ sha?: strin
     // Resolution/verification is a provenance claim. With no history store or
     // no successful checkpoint there is nothing to prove, so fail closed.
     if (mode !== 'project' && mode !== 'shadow') return { dirty: true };
-    const sha = (await gitOrNull(root, ['rev-parse', '--verify', '-q', SUCCESS_REF], ENV))?.trim() || undefined;
+    const sha = await successCheckpointSha(root, ENV);
     if (!sha) return { dirty: true };
     try {
       const [currentTree, checkpointTree] = await Promise.all([
         writeCurrentTree(root, ENV),
         git(root, ['rev-parse', `${sha}^{tree}`], ENV).then((value) => value.trim()),
       ]);
-      return currentTree === checkpointTree ? { sha, dirty: false } : { dirty: true };
+      if (currentTree === checkpointTree) return { sha, dirty: false };
+      // Equal hashes are the fast path, not the definition. Checkpoints written
+      // before TeXChronicle stopped recording its own state also contain
+      // .latex-preview and .claude, so their tree can never hash equal to one
+      // written today even when every file of the paper is identical — which
+      // left an upgraded project permanently "dirty" and unable to resolve a
+      // comment. Ask the question the rest of history already asks: does
+      // anything OUTSIDE the tool's own directories differ?
+      const same = await gitOrNull(root, ['diff', '--quiet', ...SAFE_DIFF, checkpointTree, currentTree, ...EXCLUDE_TOOL], ENV);
+      return same !== null ? { sha, dirty: false } : { dirty: true };
     } catch {
       return { dirty: true };
     }
@@ -408,6 +575,52 @@ async function dropToolPathsFromIndex(root: string, env: NodeJS.ProcessEnv): Pro
 }
 
 /**
+ * Never write back a file the safety snapshot no longer captures.
+ *
+ * Restore is only safe because the current files are checkpointed first, and
+ * `writeCurrentTree` deliberately stopped capturing compiler output — .aux,
+ * .out, .log, and a PDF that has a same-stem .tex beside it. Older checkpoints
+ * DO contain those paths, and `checkout-index -a -f` writes every path in the
+ * index it is handed. So restoring one wrote a stale `chapter.pdf` and
+ * `notes.out` over the current ones while the snapshot taken a moment earlier
+ * held neither: those bytes then existed nowhere at all, which is the one
+ * outcome this whole feature promises cannot happen. (`.out` is a LaTeX
+ * auxiliary by extension, but on a real desk it is just as likely to be an
+ * author's own file.)
+ *
+ * The rule is therefore a containment, not a preference: the set of paths a
+ * restore may WRITE must be a subset of the set a snapshot would CAPTURE.
+ * Returned lowercase-posix so a single-file restore can say why it refused.
+ */
+async function dropUncapturedPathsFromIndex(root: string, env: NodeJS.ProcessEnv): Promise<Set<string>> {
+  // -z: raw bytes, so a non-ASCII filename is not handed back C-quoted.
+  const listed = await gitOrNull(root, ['ls-files', '-z'], env);
+  const paths = (listed ?? '').split('\0').filter(Boolean);
+  const inTree = new Set(paths.map((path) => path.toLocaleLowerCase()));
+  const drop: string[] = [];
+  const dropped = new Set<string>();
+  for (const path of paths) {
+    const lower = path.toLocaleLowerCase();
+    const generated = lower.split('/').slice(0, -1).some((segment) => CACHE_DIRS.has(segment)) ||
+      GENERATED_SUFFIXES.some((suffix) => lower.endsWith(suffix)) ||
+      // The compiled document, identified the same way the capture rules do it:
+      // by a .tex of the same name beside it. Checked in the checkpoint AND on
+      // disk, because a snapshot taken now would answer from disk.
+      (lower.endsWith('.pdf') && (
+        inTree.has(`${lower.slice(0, -4)}.tex`) ||
+        await stat(resolve(root, `${path.slice(0, -4)}.tex`)).then(() => true, () => false)
+      ));
+    if (!generated) continue;
+    drop.push(path);
+    dropped.add(lower);
+  }
+  for (let at = 0; at < drop.length; at += 100) {
+    await git(root, ['update-index', '--force-remove', '--', ...drop.slice(at, at + 100)], env);
+  }
+  return dropped;
+}
+
+/**
  * Restore the working tree to a checkpoint ("revert to this version"). Snapshots
  * the current state first (so it's reversible — the just-lost work becomes a new
  * checkpoint), then writes the checkpoint's files back via a TEMP index +
@@ -435,6 +648,7 @@ export async function restoreCheckpoint(root: string, sha: string): Promise<void
     try {
       await git(root, ['read-tree', sha], env);       // load the checkpoint tree into a temp index
       await dropToolPathsFromIndex(root, env);
+      await dropUncapturedPathsFromIndex(root, env);
       await git(root, ['checkout-index', '-a', '-f'], env); // write those files to the working tree
     } finally {
       await rm(idx, { force: true }).catch(() => {});
@@ -469,6 +683,14 @@ export async function restoreFile(root: string, sha: string, relPath: string): P
   if (!rel || rel.split(/[/\\]/).some((s) => s === '..' || s === '.')) throw new Error('invalid path');
   const reachable = await gitOrNull(root, ['merge-base', '--is-ancestor', sha, REF], ENV);
   if (reachable === null) throw new Error('unknown checkpoint');
+  // `checkout-index -f` handed a path that is now a DIRECTORY removes the
+  // directory — with everything inside it — and writes the file in its place,
+  // reporting success. The author asked to revert one file and lost a folder of
+  // work they never named. Refuse instead, and say what to do about it.
+  const occupying = await stat(resolve(root, rel)).catch(() => null);
+  if (occupying?.isDirectory()) {
+    throw new Error(`Cannot restore ${rel}: a folder now occupies that path. Move or delete it first.`);
+  }
   await withLock(root, async () => {
     // The point of this line is that the restore is reversible. If it failed,
     // it is not — so refuse rather than overwrite the working tree and discard
@@ -485,6 +707,12 @@ export async function restoreFile(root: string, sha: string, relPath: string): P
     try {
       await git(root, ['read-tree', sha], env);
       await dropToolPathsFromIndex(root, env);
+      const uncaptured = await dropUncapturedPathsFromIndex(root, env);
+      if (uncaptured.has(rel.replace(/\\/g, '/').toLocaleLowerCase())) {
+        throw new Error(
+          `Cannot restore ${rel}: TeXChronicle no longer snapshots generated files like this one, so the version on disk exists in no checkpoint and restoring it would be one-way.`,
+        );
+      }
       await git(root, ['checkout-index', '-f', '--', rel], env);
     } finally {
       await rm(idx, { force: true }).catch(() => {});

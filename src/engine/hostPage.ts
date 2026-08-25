@@ -38,8 +38,25 @@ export function hostPageHtml(): string {
       const EngineClass = ENGINES[engine] || XeLatex;
       const eng = new EngineClass(runner);
       const mainFile = files.find((f) => f.path === mainTexPath);
+      // Without this, a main file that never made it into the bundle compiled an
+      // empty string: LaTeX said "Emergency stop" and the reader was left
+      // debugging a document that was never sent. The list is the evidence, so
+      // say what it actually contained.
+      if (!mainFile) {
+        return {
+          success: false,
+          pdfBytes: null,
+          pdfLen: 0,
+          log: '',
+          ms: Math.round(performance.now() - t0),
+          error: 'main file ' + mainTexPath + ' was not among the ' + files.length + ' files sent to the engine',
+        };
+      }
       const result = await eng.compile({
-        input: mainFile ? mainFile.content : '',
+        // Through materialize as well: a source that is not valid UTF-8 (a
+        // Latin-1 or UTF-16 paper) arrives base64-encoded like any figure, and
+        // the engine writes the main file by the same path as every other one.
+        input: materialize(mainFile).content,
         mainTexPath,
         additionalFiles: files.filter((f) => f.path !== mainTexPath).map(materialize),
         bibtex: !!(opts && opts.bibtex),

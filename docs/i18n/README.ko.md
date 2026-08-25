@@ -6,6 +6,7 @@
 > The product name is current, but this translation still contains pre-release installation details. See the [English README](../../README.md) for the current portable/source setup and publishing status.
 
 [English](../../README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · **한국어** · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md)
+> ⚠ Not yet published to npm/GitHub under the new name — for the working source-checkout setup see the [English README](../../README.md).
 
 ![TeXChronicle workspace](../images/workspace.png)
 

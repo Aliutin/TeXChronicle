@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   contentEditableParagraphDraft,
+  differsOnlyByMasking,
   expandLatexIncludes,
   maskLatexComments,
   parseLatexPreview,
@@ -356,4 +357,146 @@ test('browser line breaks become LaTeX paragraph breaks on structural edits', ()
   const edited = source.slice(0, change.from) + change.insert + source.slice(change.to);
   assert.equal(edited, latexDraft);
   assert.equal(parseLatexPreview(edited).blocks.filter((block) => block.type === 'paragraph').length, 2);
+});
+
+// ── Fixes for Live on ordinary papers ──────────────────────────────────────
+// Every case below is a real construct from a real paper that Live either
+// dropped, mangled, or died on.
+
+/** Everything Live would actually show, flattened. */
+function visibleText(source: string): string {
+  const document = parseLatexPreview(source);
+  const fromBlock = (block: PreviewBlock): string[] => {
+    switch (block.type) {
+      case 'title': return [previewPlainText(block.title), previewPlainText(block.author)];
+      case 'heading': case 'paragraph': case 'quote': return [previewPlainText(block.content)];
+      case 'list': return block.items.flatMap((item) => [previewPlainText(item.label ?? []), previewPlainText(item.content)]);
+      case 'figure': return [previewPlainText(block.caption)];
+      case 'table': return [previewPlainText(block.caption), ...block.rows.flatMap((row) => row.cells.map((cell) => previewPlainText(cell.content)))];
+      case 'frame': return [previewPlainText(block.title), ...block.blocks.flatMap(fromBlock)];
+      case 'columns': return block.columns.flatMap((column) => column.flatMap(fromBlock));
+      case 'callout': return [previewPlainText(block.title), ...block.blocks.flatMap(fromBlock)];
+      case 'code': return [block.content];
+      default: return [];
+    }
+  };
+  return document.blocks.flatMap(fromBlock).join(' ');
+}
+
+const article = (body: string) => `\\documentclass{article}\n\\begin{document}\n${body}\n\\end{document}`;
+
+test('a very long paragraph after an escaped character does not overflow the stack', () => {
+  // `push(...boundaries)` spread 125k arguments and took the whole Live pane
+  // down with a RangeError that the Retry button could only reproduce.
+  assert.doesNotThrow(() => parseLatexPreview(article(`a\\% ${'w'.repeat(200000)}`)));
+  assert.doesNotThrow(() => parseLatexPreview(article(`\\'{e} ${'word '.repeat(40000)}`)));
+  assert.equal(parseLatexPreview(article(`A \\& B ${'word '.repeat(1000)}`)).wordCount, 1003);
+});
+
+test('a bracket after a layout macro is prose, not an optional argument', () => {
+  assert.match(visibleText(article('\\noindent [1] Smith et al. A paper. 2020.')), /\[1\] Smith et al\./);
+  assert.match(visibleText(article('{\\small [0,1) interval} tail text.')), /\[0,1\) interval tail text\./);
+  assert.match(visibleText(article('\\centering [a] bracketed lead-in.')), /\[a\] bracketed lead-in\./);
+  // …but a genuine length after `\\` is layout and must not be read out loud.
+  const broken = visibleText(article('Text\\\\[2pt] next line of the same paragraph.'));
+  assert.doesNotMatch(broken, /2pt/);
+  assert.match(broken, /Text next line of the same paragraph\./);
+});
+
+test('an unterminated argument never swallows the rest of the document', () => {
+  // `readGroup` answers an unmatched delimiter with a group running to the end
+  // of the source. Trusting it blanked every remaining paragraph.
+  assert.match(visibleText(article('\\vspace{1em Prose that follows should still be visible.')), /Prose that follows should still be visible/);
+  const list = visibleText(article('\\begin{itemize}\n\\item [0,1) is the range here.\n\\item Second item.\n\\end{itemize}'));
+  assert.match(list, /\[0,1\) is the range here/);
+  assert.match(list, /Second item/);
+});
+
+test('an unknown macro shows the argument that actually has content', () => {
+  // Last argument first — \pill{blue}{Text} — but never at the cost of showing
+  // nothing at all, which is what \SI{5}{\metre} rendered.
+  assert.match(visibleText(article('Text \\SI{5}{\\metre} more.')), /Text 5 more\./);
+  assert.match(visibleText(article('\\pill{blue}{Visible Text} tail.')), /Visible Text tail\./);
+  assert.match(visibleText(article('Text \\gls{term} more.')), /Text term more\./);
+});
+
+test('a sentence sharing a line with an image survives', () => {
+  const source = article('Prose before.\n\\includegraphics[width=2cm]{logo} is our logo and this sentence continues.\nProse after.');
+  assert.match(visibleText(source), /is our logo and this sentence continues\./);
+  // An image alone on its line is still a block of its own.
+  const alone = parseLatexPreview(article('\\includegraphics[width=2cm]{logo}'));
+  const image = alone.blocks.find((block) => block.type === 'image');
+  assert.ok(image?.type === 'image');
+  assert.deepEqual(image.assets, ['logo']);
+});
+
+test('a frame quoted inside verbatim does not turn a paper into a slide deck', () => {
+  const source = article('Prose.\n\\begin{verbatim}\n\\begin{frame}{X}\n\\end{frame}\n\\end{verbatim}\nMore prose.');
+  assert.equal(parseLatexPreview(source).kind, 'article');
+  assert.equal(parseLatexPreview('\\documentclass{beamer}\n\\begin{document}\n\\begin{frame}\nA.\n\\end{frame}\n\\end{document}').kind, 'presentation');
+});
+
+test('overlay masking stays out of ordinary papers', () => {
+  // `<expr> ::= …` is BNF in a CS paper, and `\alert<x>` is prose about a macro.
+  assert.match(visibleText(article('The condition \\alert<x> is prose.')), /<x>/);
+  assert.match(visibleText(article('\\begin{itemize}\n\\item\n<not overlay> real prose here\n\\end{itemize}')), /<not overlay> real prose here/);
+  // A deck still hides them.
+  const deck = parseLatexPreview('\\documentclass{beamer}\n\\begin{document}\n\\begin{frame}\n\\begin{itemize}\n\\item<2-> Revealed point\n\\end{itemize}\n\\end{frame}\n\\end{document}');
+  assert.doesNotMatch(JSON.stringify(deck.blocks), /<2-/);
+});
+
+test('a figure with subfigures shows its own caption and numbers its panels', () => {
+  const source = String.raw`\documentclass{article}
+\begin{document}
+\begin{figure}[t]
+  \begin{subfigure}[b]{0.48\textwidth}
+    \includegraphics[width=\linewidth]{a}
+    \caption{Left panel shows A}\label{fig:a}
+  \end{subfigure}
+  \begin{subfigure}[b]{0.48\textwidth}
+    \includegraphics[width=\linewidth]{b}
+    \caption{Right panel shows B}\label{fig:b}
+  \end{subfigure}
+  \caption{THE MAIN CAPTION that readers see.}
+  \label{fig:main}
+\end{figure}
+\end{document}`;
+  const document = parseLatexPreview(source);
+  const figure = document.blocks.find((block) => block.type === 'figure');
+  assert.ok(figure?.type === 'figure');
+  assert.equal(previewPlainText(figure.caption), 'THE MAIN CAPTION that readers see.');
+  assert.equal(document.references['fig:main'].number, '1');
+  assert.equal(document.references['fig:a'].number, '1a');
+  assert.equal(document.references['fig:b'].number, '1b');
+});
+
+test('a comment environment is parked text, like an iffalse block', () => {
+  const source = article('Real prose.\n\\begin{comment}\nA shelved draft paragraph.\n\\end{comment}\nMore real prose.');
+  const text = visibleText(source);
+  assert.match(text, /Real prose/);
+  assert.match(text, /More real prose/);
+  assert.doesNotMatch(text, /shelved draft/);
+});
+
+test('an edit bordering masked source is reported as unfixable, not as a retry', () => {
+  // The message matters: retrying an edit that straddles a `%` comment can
+  // never succeed, and the old copy asked people to do exactly that.
+  assert.equal(differsOnlyByMasking('            \n', ' % note here\n'), true);
+  assert.equal(differsOnlyByMasking('hello world', 'hello world'), false, 'identical text is not a masking difference');
+  assert.equal(differsOnlyByMasking('hello world', 'hello there'), false, 'a real mismatch is not masking');
+  assert.equal(differsOnlyByMasking('short', 'much longer text'), false, 'masking never changes length');
+  // Masking only ever blanks. A space on disk where the preview expected a
+  // letter is a genuine divergence, not a hidden region.
+  assert.equal(differsOnlyByMasking('a b', 'a  '), false);
+
+  const source = article('Hello world % note here\nmore prose.');
+  const paragraph = parseLatexPreview(source).blocks.find((block) => block.type === 'paragraph');
+  assert.ok(paragraph?.type === 'paragraph');
+  const leaf = textLeaves(paragraph.content).find((node) => node.source);
+  assert.ok(leaf?.source);
+  const at = leaf.text.indexOf('world') + 5;
+  const change = previewTextChange(leaf.source, leaf.text, leaf.text.slice(0, at) + leaf.text.slice(at + 1));
+  assert.ok(change);
+  assert.notEqual(change.expected, source.slice(change.from, change.to));
+  assert.equal(differsOnlyByMasking(change.expected, source.slice(change.from, change.to)), true);
 });

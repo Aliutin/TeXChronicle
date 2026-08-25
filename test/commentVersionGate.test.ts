@@ -32,8 +32,19 @@ test('restore comment verification requires the exact clean PDF checkpoint', asy
       body: JSON.stringify({ restoreReview: null }),
     });
 
-    assert.equal((await patch()).status, 409,
+    const refused = await patch();
+    assert.equal(refused.status, 409,
       'an idle/stale PDF was allowed to clear the restore warning');
+    // The old message said "wait for a successful recompile". After a plain
+    // editor autosave nothing is coming: /api/file suppresses the watcher for
+    // its own write, so no compile is pending and this state never resolves on
+    // its own. People sat watching for a spinner that did not exist. The
+    // message has to name the action that clears it.
+    const reason = await refused.text();
+    assert.doesNotMatch(reason, /\bWait\b/i, 'the refusal still tells the reader to wait for something');
+    assert.match(reason, /has not been rendered since it was last saved/);
+    assert.match(reason, /Recompile/);
+    assert.match(reason, /render_preview/, 'an agent needs to be told its own way out too');
     await preview.setLatestPdf(new Uint8Array(Buffer.from('%PDF-1.7\n')), 'main.tex', undefined, checkpoint.sha);
     assert.equal((await patch()).status, 200);
     const verified = (await listComments(root))[0];

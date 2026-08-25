@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, unlinkSync, existsSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -83,6 +83,38 @@ test('traversal is rejected before git ever sees it', async () => {
   for (const bad of ['../outside.tex', '..\\outside.tex', '', '.', 'a/../../b.tex']) {
     await assert.rejects(() => restoreFile(root, cp.sha, bad), `"${bad}" was accepted`);
   }
+});
+
+test('a folder standing where the file was is refused, not deleted', async () => {
+  // `checkout-index -f` handed a path that is now a directory removes the
+  // directory — everything in it — and writes the file in its place, reporting
+  // success. The author asked to revert one file and lost a folder of work they
+  // never named, with nothing in the UI to suggest it had happened.
+  const root = repo();
+  await createCheckpoint(root);
+  const [cp] = await listCheckpoints(root);
+
+  unlinkSync(join(root, 'intro.tex'));
+  mkdirSync(join(root, 'intro.tex'));
+  writeFileSync(join(root, 'intro.tex', 'inner.txt'), 'user data inside');
+
+  await assert.rejects(
+    () => restoreFile(root, cp.sha, 'intro.tex'),
+    /a folder now occupies that path/,
+  );
+  assert.ok(statSync(join(root, 'intro.tex')).isDirectory(), 'the folder was replaced by a file');
+  assert.ok(existsSync(join(root, 'intro.tex', 'inner.txt')), 'the folder\'s contents were destroyed');
+});
+
+test('restoring a file that has since been deleted still works', async () => {
+  // The refusal above must not become a refusal to restore anything missing —
+  // "I deleted this by accident, put it back" is the feature.
+  const root = repo();
+  await createCheckpoint(root);
+  const [cp] = await listCheckpoints(root);
+  unlinkSync(join(root, 'intro.tex'));
+  await restoreFile(root, cp.sha, 'intro.tex');
+  assert.equal(lines(readFileSync(join(root, 'intro.tex'), 'utf8')), 'v1 intro\n');
 });
 
 test('a legitimate filename containing dots is not rejected', async () => {

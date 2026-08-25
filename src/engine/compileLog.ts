@@ -40,6 +40,13 @@ const BLOCKED_TOOL_SIGNS: [RegExp, string][] = [
   [/wasn't possible to launch the Inkscape export/i, 'Inkscape'],
   [/Package svg Error: File `.*_svg-tex\.pdf' is missing/i, 'Inkscape'],
   [/Package minted Error: You must invoke LaTeX with the -shell-escape flag/i, 'Pygments'],
+  // minted v3 (MiKTeX 25.x, TeX Live 2024+) rewrote every one of its messages
+  // and stopped naming the flag, so a paper that fails on today's distributions
+  // matched nothing above and got no explanation at all — the one case where the
+  // reader most needs one, because the new wording blames "the minted
+  // executable" rather than shell-escape.
+  [/minted v3\+? executable is not installed/i, 'Pygments'],
+  [/minted executable is (?:unavailable|disabled)/i, 'Pygments'],
   [/runsystem\([^)]*\)\.{3}disabled/i, 'an external program'],
 ];
 
@@ -126,18 +133,51 @@ export function stubPackage(name: string): string {
 }
 
 /**
+ * The commands a package provides, for the many whose names appear nowhere in
+ * the macros they define. `\includegraphics` says nothing about `graphicx` and
+ * `\toprule` says nothing about `booktabs`, so the name-embedding rule below
+ * called both of them unused and stubbed them out — which does not fail, it
+ * quietly drops every figure and every rule from the PDF.
+ */
+const PACKAGE_MACROS: [string, RegExp][] = [
+  ['hyperref', /\\(?:href|url|hypersetup|autoref)\b/],
+  ['graphicx', /\\includegraphics\b/],
+  ['booktabs', /\\(?:toprule|midrule|bottomrule|cmidrule)\b/],
+  ['xcolor', /\\(?:textcolor|colorbox|definecolor|color)\b/],
+  ['siunitx', /\\(?:SI|si|num|qty|unit)\b/],
+  ['cleveref', /\\(?:cref|Cref)\b/],
+  ['natbib', /\\(?:citep|citet)\b/],
+  ['subcaption', /\\begin\{subfigure\}/],
+  ['amsmath', /\\begin\{align/],
+];
+
+/**
+ * Packages that are never safe to stub, because they are configured entirely
+ * through their options and their effect is invisible in the body: page
+ * geometry, line spacing, paragraph skips, text fonts. Nothing in the source
+ * ever "uses" them, so the rule below would always call them unused — and
+ * silently reset the paper to Computer Modern at the default margins, which
+ * looks like a successful compile of a different document.
+ */
+const OPTION_ONLY_PACKAGES = new Set(['geometry', 'setspace', 'parskip', 'newtxtext', 'mathptmx']);
+
+/**
  * Does the source plausibly use this package? Deliberately conservative: a
  * false "yes" only costs us the retry (the compile fails as it would have
  * anyway), while a false "no" would stub something load-bearing and silently
  * change the output.
  */
 export function usesPackage(name: string, src: string): boolean {
+  if (OPTION_ONLY_PACKAGES.has(name)) return true;
   // Commands whose names embed the package are the strongest signal, and cover
   // the packages users actually hit: \includesvg, \includepdf, \subfile, …
   if (new RegExp(String.raw`\\[a-zA-Z]*${escapeRe(name)}[a-zA-Z]*\s*[\[{]`, 'i').test(src)) return true;
   // Environments named after it: \begin{algorithm}, \begin{tikzpicture}, …
   if (new RegExp(String.raw`\\begin\{${escapeRe(name)}`, 'i').test(src)) return true;
-  return false;
+  // The macros it provides. Case-sensitive: `\SI` and `\si` are both siunitx,
+  // but TeX control sequences are not interchangeable in general.
+  const macros = PACKAGE_MACROS.find(([pkg]) => pkg === name)?.[1];
+  return macros ? macros.test(src) : false;
 }
 
 function escapeRe(s: string): string {

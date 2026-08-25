@@ -67,13 +67,35 @@ export function ensureServer(): Promise<PreviewServerHandle> {
   return serverStarted;
 }
 
+/**
+ * Playwright downloads no browser when it is installed — 1.62 has no postinstall
+ * hook — so a plain `npm install` leaves this launch to fail. Its own error is an
+ * ASCII-art box beginning "Looks like Playwright was just installed", written for
+ * a terminal; relayed through MCP it reaches the reader as a wall of box-drawing
+ * characters around a command that is not the one they need. Say the one command
+ * that fixes it, and where to run it.
+ *
+ * Exported so the mapping can be tested without a missing browser.
+ */
+export function browserLaunchHelp(error: unknown): string | null {
+  const message = String((error as Error)?.message ?? error);
+  if (!/Executable doesn't exist/i.test(message)) return null;
+  return "TeXChronicle needs Playwright's Chromium and it is not installed. Run:\n"
+    + '  npx --no-install playwright install chromium --only-shell\n'
+    + 'in the TeXChronicle folder, then restart your MCP client.';
+}
+
 /** Tier 2 — headless Chromium. Needed to screenshot the diff page; no TeX
  *  engine and no assets involved. */
 function ensureBrowser() {
   if (disposed) return Promise.reject(new ShuttingDownError());
   browserStarted ??= (async () => {
     const preview = await ensureServer();
-    const browser = await chromium.launch({ headless: true });
+    const browser = await chromium.launch({ headless: true }).catch((error: unknown) => {
+      const help = browserLaunchHelp(error);
+      if (help) throw new Error(help);
+      throw error;
+    });
     return { browser, preview };
   })();
   return browserStarted;

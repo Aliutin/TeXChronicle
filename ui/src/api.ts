@@ -298,19 +298,52 @@ export async function fsOp(op: string, path: string, to?: string): Promise<strin
   return r.ok ? null : (await r.text()) || 'operation failed';
 }
 
+/** The file on disk moved on while the editor held unsaved text. Nothing was
+ * written — the point of the whole exchange is that the other version survives
+ * until a person decides which one wins. */
+export class ConflictError extends Error {
+  constructor() {
+    super('This file changed on disk while you had unsaved edits.');
+    this.name = 'ConflictError';
+  }
+}
+
+export interface LoadedFile { content: string; etag: string | null }
+
+/**
+ * Read a project file, keeping the version tag the server answered with.
+ *
+ * Without the tag a save is a blind overwrite: an agent edits main.tex, the
+ * open buffer knows nothing about it, and the next autosave 30s later puts the
+ * old text back over the new one with no error anywhere.
+ */
+export async function loadFile(path: string): Promise<LoadedFile> {
+  const r = await fetch(`/api/file?path=${encodeURIComponent(path)}`);
+  if (!r.ok) throw new Error((await r.text()) || `the server answered ${r.status}`);
+  return { content: await r.text(), etag: r.headers.get('ETag') };
+}
+
 /**
  * Write a project file. `compile` is Ctrl+S / Save; a bare autosave passes false.
  *
  * The editor used to call `fetch` directly, so it was the one write with no
  * guard — and the one where failing silently costs the user their text rather
  * than a click.
+ *
+ * `etag` makes the write conditional: the server refuses it with 409 when disk
+ * holds something newer. Passing null writes unconditionally, which is also
+ * what happens against a server too old to send the header at all.
  */
-export async function saveFile(path: string, content: string, compile: boolean): Promise<void> {
+export async function saveFile(path: string, content: string, compile: boolean, etag?: string | null): Promise<string | null> {
   requireLive();
   const r = await fetch(`/api/file?path=${encodeURIComponent(path)}&compile=${compile ? 1 : 0}`, {
-    method: 'PUT', body: content,
+    method: 'PUT',
+    ...(etag ? { headers: { 'If-Match': etag } } : {}),
+    body: content,
   });
+  if (r.status === 409) throw new ConflictError();
   if (!r.ok) throw new Error((await r.text()) || 'save failed');
+  return r.headers.get('ETag');
 }
 
 /** Trigger a compile now (the toolbar's manual "Recompile"). */
