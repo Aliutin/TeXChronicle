@@ -43,6 +43,7 @@
   },
   "files": [
     "bin/",
+    "scripts/build-ui.mjs",
     "src/",
     "ui/dist/",
     "assets/fallback-styles/",
@@ -56,14 +57,13 @@
   "scripts": {
     "start": "node --require ./bin/userInfoFallback.cjs --import tsx src/server.ts",
     "typecheck": "tsc --noEmit && tsc -p ui --noEmit",
-    "build:ui": "vite build ui",
+    "build:ui": "node scripts/build-ui.mjs",
     "build:portable:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-portable.ps1",
     "verify:portable:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-portable.ps1",
     "dev:ui": "vite ui",
     "test": "node --require ./bin/userInfoFallback.cjs --import tsx --test test/*.test.ts",
     "postinstall": "node bin/ensureBrowser.mjs",
-    "prepare": "npm run build:ui",
-    "prepublishOnly": "npm run build:ui"
+    "prepare": "npm run build:ui"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
