@@ -6,8 +6,11 @@
 
 ## Everyday use
 
-1. Add the server to your paper project's `.mcp.json` (see the README), restart Claude Code.
-   Or install the plugin for slash commands (below).
+1. Add the server to your paper project's `.mcp.json`, restart Claude Code. Until the npm
+   release that entry installs from GitHub — `"command": "npx", "args": ["-y",
+   "github:Aliutin/TeXChronicle"]`; see the
+   [README](../README.md#setup-with-an-llmmcp-client) for the source-checkout alternative
+   and what the GitHub install costs. Or install the plugin for slash commands (below).
 2. Ask your connected agent to *"render a preview"* (or run `/texchronicle`). The **workspace** opens: a
    top-level view switch gives **Code**, a source-preserving **Live visual editor**, the exact compiled
    **PDF**, and **Split** for source + PDF together. **History** is beside them; toggle
@@ -230,6 +233,20 @@ both backends now search the project's own folders, so `styles/myvenue.cls` with
 `\documentclass{myvenue}`, or `bib/refs.bib` with `\bibliography{refs}`, resolves without moving
 the file to the root. (TeX itself does not look inside subdirectories, which is why this used to
 fail with the file demonstrably right there — and why the bibliography case failed silently.)
+
+## Environment variables
+
+None of these are required — TeXChronicle works with all of them unset. Set them in your
+shell, or in the `"env"` block of the server's entry in `.mcp.json`.
+
+| Variable | What it does |
+| --- | --- |
+| `TEXCHRONICLE_PROJECT` | The paper folder to work on, when the server was not started in it. Lowest precedence of the three ways: a `--project <dir>` argument wins over it, and a `projectRoot` passed to `render_preview` re-points the whole session over both. |
+| `TEXCHRONICLE_ASSETS_DIR` | Where the one-time WASM TeX Live assets (~650 MB) live. Defaults to a per-user cache, so a checkout, a global install and an `npx` run share one copy. (`MAGICTEX_ASSETS_DIR` is still read as a migration alias.) |
+| `TEXCHRONICLE_KEEP_RENDERS` | How many historical render PDFs to keep in `.latex-preview/renders/`. Default 50; `0` keeps every one. The render on screen is never deleted. |
+| `TEXCHRONICLE_NO_OPEN` | Set to `1` to keep TeXChronicle from opening a browser tab. The workspace still runs and prints its URL — for headless machines, remote sessions, and tests. |
+| `TEXCHRONICLE_SKIP_BROWSER_DOWNLOAD` | Set to `1` to skip the automatic Playwright Chromium download that runs at install time and is retried the first time a preview needs a browser. Playwright's own `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` does the same. (`0`, `false` and empty do not count as set.) With no Chromium, TeXChronicle falls back to an installed Chrome or Edge. |
+| `TEXCHRONICLE_BROWSER` | Which browser to drive, tried before everything else: `chrome`, `msedge`, `chromium`, or the full path to an executable. The order otherwise is the downloaded headless Chromium, then that download, then an installed Chrome, then Edge. |
 
 ## Notes
 

@@ -40,6 +40,12 @@ jobs:
 
       - name: Install
         run: npm ci
+        env:
+          # The postinstall would fetch the headless shell here — before the
+          # browser cache below has been restored, so it would download ~150 MB
+          # and then have the cache overwrite it. The explicit install step after
+          # the cache does the same job for free on a cache hit.
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
 
       # Keyed on the engine version: a texlyre-busytex bump must re-download
       # rather than silently reuse assets built for the previous release.

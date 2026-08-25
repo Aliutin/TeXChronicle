@@ -48,7 +48,7 @@ body:
     id: version
     attributes:
       label: TeXChronicle version
-      description: "`npm ls texchronicle`, or the commit if running from a clone."
+      description: "`npm ls texchronicle`, the portable ZIP's version, or the commit if you installed from GitHub (`npx -y github:Aliutin/TeXChronicle`) or a clone."
     validations:
       required: true
 

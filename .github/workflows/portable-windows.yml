@@ -22,6 +22,11 @@ jobs:
 
       - name: Install build dependencies
         run: npm ci
+        env:
+          # The postinstall would fetch the headless shell before the cache below
+          # has been restored. "Fetch compiler payloads" already does it, after
+          # the cache, and that is the copy build-portable.ps1 bundles.
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
 
       - name: Cache compiler payloads
         uses: actions/cache@v4

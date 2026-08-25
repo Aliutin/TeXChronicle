@@ -25,8 +25,12 @@ jobs:
       matrix:
         node: [20, 22]
     env:
-      # The tests exercise the comment tools only — no headless browser — so skip
-      # Playwright's browser download to keep installs fast.
+      # `npm ci` now downloads Playwright's headless shell from this package's
+      # postinstall, so that a peer never has to install a browser by hand. These
+      # tests exercise the comment tools only — no headless browser — so the
+      # variable that turns that download off keeps this job as fast as it was.
+      # bin/ensureBrowser.mjs honours it at run time too, which is what stops the
+      # server from downloading a browser mid-test if one ever does need it.
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
     steps:
       - uses: actions/checkout@v7

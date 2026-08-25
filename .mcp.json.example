@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "texchronicle": {
-      "command": "node",
-      "args": ["/absolute/path/to/TeXChronicle/bin/cli.mjs"]
+      "command": "npx",
+      "args": ["-y", "github:Aliutin/TeXChronicle"]
     }
   }
 }

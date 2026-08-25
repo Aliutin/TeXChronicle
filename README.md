@@ -132,7 +132,20 @@ same recent-project chooser.
 
 ### Terminal launch
 
-From a source checkout, install and link TeXChronicle once:
+Until the npm release, install straight from GitHub — no clone, no build step:
+
+```bash
+cd /path/to/paper
+npx -y github:Aliutin/TeXChronicle preview main.tex
+```
+
+npm clones the repository, installs it (including the UI build — see
+[Setup with an LLM/MCP client](#setup-with-an-llmmcp-client) for exactly what
+happens and what it costs), and runs the workspace. After the npm release the
+same line is `npx -y texchronicle preview main.tex`.
+
+From a source checkout instead — the developer route — install and link
+TeXChronicle once:
 
 ```bash
 npm install
@@ -161,61 +174,59 @@ open or use it.
 
 ## Setup with an LLM/MCP client
 
-The package and MCP metadata now use `texchronicle` and
-`io.github.Aliutin/texchronicle`. Neither the npm package nor the renamed GitHub
-repository is published yet — `npm view texchronicle` is a 404 and
-`github.com/Aliutin/TeXChronicle` is "Repository not found" — so an MCP client
-has to be pointed at this source checkout:
+The package and MCP metadata use `texchronicle` and
+`io.github.Aliutin/texchronicle`. The npm package is not published yet — `npm view
+texchronicle` is still a 404 — so **install from GitHub**, which npm does directly,
+with no clone and no build step of your own:
 
-1. **Prepare the checkout** (once, in the TeXChronicle folder):
-
-   ```bash
-   npm install
-   npx --no-install playwright install chromium --only-shell
-   npm run build:ui
-   ```
-
-   `npm install` does *not* download a browser — Playwright has no postinstall
-   hook — so skip the second command and the first diff or WASM compile fails.
-   It *does* build the workspace UI: `npm install` runs the `prepare` script,
-   which is `npm run build:ui`. Run it by hand after editing anything under
-   `ui/`; the third command above is that same build, kept here because a clone
-   whose `prepare` was skipped (`npm install --ignore-scripts`) opens the basic
-   viewer instead of the workspace, with nothing on screen saying why.
-
-2. **Add it to your paper project's `.mcp.json`** (see [`.mcp.json.example`](.mcp.json.example)):
+1. **Add it to your paper project's `.mcp.json`** (see [`.mcp.json.example`](.mcp.json.example)):
 
    ```json
    {
      "mcpServers": {
        "texchronicle": {
-         "command": "node",
-         "args": ["/absolute/path/to/TeXChronicle/bin/cli.mjs"]
+         "command": "npx",
+         "args": ["-y", "github:Aliutin/TeXChronicle"]
        }
      }
    }
    ```
 
-   Go through `bin/cli.mjs` rather than `npx tsx src/server.ts`: the entry script
-   is what checks your Node version and says so in plain words when it is too
-   old, and what preloads the `os.userInfo` fallback some Windows accounts need.
-   Called directly, `src/server.ts` skips both and fails in ways an MCP client
-   reports only as `-32000`.
+   npm clones the repository and installs it. Because this package has a `prepare`
+   script, npm installs its `devDependencies` too and runs `prepare` before
+   packing — that script is `npm run build:ui`, so the browser workspace
+   (`ui/dist`) is built as part of the install rather than being something you
+   have to remember. A `postinstall` step then fetches Playwright's headless
+   Chromium; see [Requirements](#requirements) for how to opt out of that or point
+   it at a browser you already have.
 
-   Two shorter forms exist, neither usable today:
+   Three things to know about the GitHub route, none of them blockers: the machine
+   needs **`git` on `PATH`**; the install pulls devDependencies (React, Vite,
+   TypeScript) and builds the UI, so it is markedly slower than a registry install
+   will be; and every `npx` run re-resolves the git ref over the network — how much
+   of the previous run is reused depends on your npm version.
 
-   - **Once the GitHub repository is public** — it is not yet;
-     `github.com/Aliutin/TeXChronicle` still answers "Repository not found" —
-     peers can skip the clone entirely with
-     `"command": "npx", "args": ["-y", "github:Aliutin/TeXChronicle"]`. npx
-     clones and installs it, and the `prepare` script builds `ui/dist` as part
-     of that install, so the workspace is there without a separate build step.
-     They still need `npx --no-install playwright install chromium --only-shell`.
-   - **After an npm release**, `"command": "npx", "args": ["-y", "texchronicle"]`.
+   Two other forms:
 
-3. **Restart Claude Code** (or `/mcp` reconnect) so it picks up the server.
+   - **A source checkout** — the developer route, and the one to use when you want
+     the server to be *your* working tree. In the TeXChronicle folder run `npm
+     install` (which runs `prepare` → `npm run build:ui`), then point the client at
+     the entry script: `"command": "node", "args":
+     ["/absolute/path/to/TeXChronicle/bin/cli.mjs"]`. Go through `bin/cli.mjs`
+     rather than `npx tsx src/server.ts`: the entry script is what checks your Node
+     version and says so in plain words when it is too old, and what preloads the
+     `os.userInfo` fallback some Windows accounts need. Called directly,
+     `src/server.ts` skips both and fails in ways an MCP client reports only as
+     `-32000`. Re-run `npm run build:ui` by hand after editing anything under
+     `ui/` — and note that a clone whose scripts were skipped (`npm install
+     --ignore-scripts`) opens the basic viewer instead of the workspace, with
+     nothing on screen saying why.
+   - **After the npm release**, the short form: `"command": "npx", "args": ["-y",
+     "texchronicle"]`.
 
-4. **Ask Claude to render.** e.g. *"render a preview of this paper"* → the first call
+2. **Restart Claude Code** (or `/mcp` reconnect) so it picks up the server.
+
+3. **Ask Claude to render.** e.g. *"render a preview of this paper"* → the first call
    downloads the WASM TeX Live assets (~650 MB, one time), compiles, and opens the
    live preview tab. Subsequent edits reload it automatically.
 
@@ -231,15 +242,18 @@ folder explicitly in that case, either in the server's config entry:
 {
   "mcpServers": {
     "texchronicle": {
-      "command": "node",
-      "args": ["/absolute/path/to/TeXChronicle/bin/cli.mjs"],
+      "command": "npx",
+      "args": ["-y", "github:Aliutin/TeXChronicle"],
       "env": { "TEXCHRONICLE_PROJECT": "/absolute/path/to/paper" }
     }
   }
 }
 ```
 
-or as a server argument: `"args": ["/abs/path/to/TeXChronicle/bin/cli.mjs", "--project", "/abs/path/to/paper"]`.
+or as a server argument, appended after the package: `"args": ["-y",
+"github:Aliutin/TeXChronicle", "--project", "/abs/path/to/paper"]` — and from a
+source checkout, `"args": ["/abs/path/to/TeXChronicle/bin/cli.mjs", "--project",
+"/abs/path/to/paper"]`.
 
 The third way needs no config change at all: pass **`projectRoot`** to
 `render_preview` — *"render a preview of /Users/me/papers/thesis"* is enough for
@@ -261,18 +275,17 @@ Set `TEXCHRONICLE_ASSETS_DIR` to put them elsewhere. To pre-fetch:
 
 ## Install as a Claude Code plugin (slash commands)
 
-After the renamed repository is published, the optional Claude Code plugin gives
-you the MCP server **and** slash commands:
+The optional Claude Code plugin gives you the MCP server **and** slash commands:
 
 ```
 /plugin marketplace add Aliutin/TeXChronicle
 /plugin install texchronicle
 ```
 
-The plugin's server entry is `npx -y texchronicle`, so the plugin needs the **npm
-publish**, not just a public repository — installing it before that release gives
-you the slash commands with a server that cannot start. Until then, add the
-server by hand as in the previous section.
+Until the npm release, the plugin's bundled server entry is the same GitHub form
+as above (`npx -y github:Aliutin/TeXChronicle`), so it carries the same caveats:
+`git` on `PATH`, and a first start that installs and builds rather than just
+unpacking. It flips to `npx -y texchronicle` once the package is on npm.
 
 Then, in your paper project, use the **workflow commands** for the common flows:
 
@@ -427,13 +440,25 @@ the comment loop, the review workflow, and traceable history possible.
 
 The requirements below apply to the npm/source installation. The Windows
 portable release carries these runtimes itself and needs only 64-bit Windows 10
-or later plus a normal web browser for the workspace window.
+or later plus a normal web browser for the workspace window. The `TEXCHRONICLE_*`
+variables named below are listed together in
+[the user guide](docs/USER-GUIDE.md#environment-variables).
 
 - Node 20.19+ (the floor `chokidar` and `playwright` actually need; the server checks at startup and says so)
-- Playwright's Chromium (~150–300 MB). It is **not** installed automatically —
-  Playwright ships no postinstall hook — so run
-  `npx --no-install playwright install chromium --only-shell` in the TeXChronicle
-  folder once, or set it to reuse your installed Chrome.
+- Playwright's headless Chromium (~150–300 MB), fetched **automatically**: a
+  `postinstall` step downloads it at install time, and if it is missing when the
+  browser is first needed, that download is retried then. Ways to change that:
+  - `TEXCHRONICLE_SKIP_BROWSER_DOWNLOAD=1` (or Playwright's own
+    `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`) skips the download — useful on a
+    metered connection, in CI, or in an image built offline.
+  - With no Playwright Chromium present, TeXChronicle falls back to a **Chrome or
+    Edge** already installed on the machine, and says so when it does.
+  - `TEXCHRONICLE_BROWSER` chooses one explicitly, ahead of all of the above:
+    `chrome`, `msedge`, `chromium`, or the full path to an executable.
+
+  *Troubleshooting:* if the automatic download was skipped or failed and no
+  Chrome/Edge is found, the one-time fix is `npx --no-install playwright install
+  chromium --only-shell` in the TeXChronicle folder.
 - ~650 MB disk for the one-time WASM TeX Live assets — all of it fetched on the
   first run, in three package sets (basic 87 MB, recommended 190 MB, extra 324 MB,
   plus the 31 MB engine). A normal paper only *loads* the basic set; the larger two

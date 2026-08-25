@@ -22,7 +22,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "texchronicle"
+        "github:Aliutin/TeXChronicle"
       ]
     }
   }

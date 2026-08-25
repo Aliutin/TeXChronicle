@@ -92,6 +92,11 @@ npm ci
 npm run build:portable:win
 ```
 
+`npm ci` builds the workspace UI (`prepare`) and downloads Playwright's headless
+Chromium (`postinstall`) — the build wants that browser, so let it run, or point
+the builder at a cache you already have with `-PlaywrightDirectory` (below) and
+set `TEXCHRONICLE_SKIP_BROWSER_DOWNLOAD=1`.
+
 The builder creates `dist-portable/TeXChronicle-Portable-Windows-x64/`, runs a packaged
 smoke test, and emits a versioned ZIP plus SHA-256 file. The smoke test deliberately
 uses only bundled paths, compiles a real minimal paper with WASM, verifies the Git

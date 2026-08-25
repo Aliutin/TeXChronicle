@@ -52,7 +52,11 @@ export async function ensureAssets(): Promise<void> {
   console.error(`[texchronicle] First run: downloading TeX Live WASM assets (~480 MB, one time) into ${busytexDir()}. This can take a few minutes…`);
   await new Promise<void>((resolve, reject) => {
     const { command, args } = downloadCommand(dest);
-    const child = spawn(command, args, { stdio: ['ignore', 'inherit', 'inherit'] });
+    // The downloader prints its progress on stdout. Under an MCP client stdout IS
+    // the JSON-RPC channel, so a first-run download would corrupt the protocol
+    // mid-call; route it to stderr, where the rest of our own messages go.
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'inherit'] });
+    child.stdout?.pipe(process.stderr);
     child.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`asset download failed (exit ${code}). Run manually: npx texlyre-busytex download-assets "${dest}"`))));
     child.on('error', reject);
   });

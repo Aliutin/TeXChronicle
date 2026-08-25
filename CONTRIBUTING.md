@@ -33,6 +33,18 @@ All three must pass; CI runs exactly these on Node 20 and 22. The tests are
 engine-free (no headless browser, no WASM download), so they're fast — please
 keep them that way, and add coverage alongside behaviour changes.
 
+`npm install` does two things beyond fetching dependencies: `prepare` builds the
+workspace UI (so the `npm run build:ui` above is really the rebuild you run after
+editing anything under `ui/`), and a `postinstall` step downloads Playwright's
+headless Chromium. Set `TEXCHRONICLE_SKIP_BROWSER_DOWNLOAD=1` to skip that
+download — the unit suite doesn't need a browser; the `scripts/smoke-*.mjs` runs
+do (they fall back to an installed Chrome or Edge, or to whatever
+`TEXCHRONICLE_BROWSER` points at).
+
+You do not need a clone to *use* TeXChronicle: until the npm release the install
+route for everyone else is `npx -y github:Aliutin/TeXChronicle` (see the
+[README](README.md#setup-with-an-llmmcp-client)). A clone is for changing it.
+
 ## Things worth knowing
 
 - **Changing anything in `src/` needs a Claude Code restart to take effect** —
