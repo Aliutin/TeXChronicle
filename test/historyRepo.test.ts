@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { historyRepo, forgetHistoryRepo } from '../src/git/historyRepo.js';
@@ -47,6 +47,13 @@ test('an unwritable history store reports where and why — not "no git"', async
     assert.ok(r.detail, 'the reason must survive to the caller');
     assert.match(r.detail!, /\.latex-preview/, 'names the path it tried');
     assert.ok(r.detail!.length > '.latex-preview'.length + 2, 'and carries the OS error, not just the path');
+
+    // A transient startup/Dropbox lock must not poison the entire running
+    // process. Repairing the path should restore history on the next request,
+    // without requiring an application restart or a private cache reset.
+    rmSync(join(project, '.latex-preview'), { force: true });
+    const recovered = await historyRepo(project);
+    assert.equal(recovered.mode, 'shadow', recovered.detail);
   } finally {
     forgetHistoryRepo();
     rmSync(project, { recursive: true, force: true });
@@ -62,6 +69,47 @@ test('an existing git repo is left alone', async () => {
     const r = await historyRepo(dir);
     assert.equal(r.mode, 'project');
     assert.equal(r.env.GIT_DIR, undefined, 'no shadow repo — checkpoints belong in theirs');
+  } finally {
+    forgetHistoryRepo();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('concurrent first access shares one shadow-repo initialization', async () => {
+  forgetHistoryRepo();
+  const dir = mkdtempSync(join(tmpdir(), 'hr-concurrent-'));
+  try {
+    writeFileSync(join(dir, 'main.tex'), '');
+    const results = await Promise.all(Array.from({ length: 16 }, () => historyRepo(dir)));
+    for (const result of results) {
+      assert.equal(result.mode, 'shadow');
+      assert.strictEqual(result, results[0],
+        'concurrent callers did not share the same initialization result');
+    }
+    assert.ok(existsSync(join(dir, '.latex-preview', 'history.git', 'HEAD')));
+    assert.ok(!existsSync(join(dir, '.latex-preview', 'history.git', 'config.lock')));
+  } finally {
+    forgetHistoryRepo();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an orphaned git-init config lock is repaired automatically', async () => {
+  forgetHistoryRepo();
+  const dir = mkdtempSync(join(tmpdir(), 'hr-stale-init-'));
+  const gitDir = join(dir, '.latex-preview', 'history.git');
+  const configLock = join(gitDir, 'config.lock');
+  try {
+    writeFileSync(join(dir, 'main.tex'), '');
+    mkdirSync(gitDir, { recursive: true });
+    writeFileSync(configLock, 'left by an interrupted git init');
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(configLock, old, old);
+
+    const result = await historyRepo(dir);
+    assert.equal(result.mode, 'shadow', result.detail);
+    assert.ok(existsSync(join(gitDir, 'HEAD')));
+    assert.ok(!existsSync(configLock), 'the orphaned config lock was left in place');
   } finally {
     forgetHistoryRepo();
     rmSync(dir, { recursive: true, force: true });

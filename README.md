@@ -1,35 +1,21 @@
-# MagicTeX — LaTeX Editor for AI Agents
+# TeXChronicle — section-aware LaTeX history and live editing
 
-<!-- badges -->
-[![npm](https://img.shields.io/npm/v/magictex-mcp?logo=npm)](https://www.npmjs.com/package/magictex-mcp)
-[![MCP registry](https://img.shields.io/badge/MCP%20registry-io.github.ZoeLinUTS%2Fmagictex-6f42c1)](https://registry.modelcontextprotocol.io)
-[![CI](https://github.com/ZoeLinUTS/MagicTeX-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ZoeLinUTS/MagicTeX-mcp/actions/workflows/ci.yml)
-[![stars](https://img.shields.io/github/stars/ZoeLinUTS/MagicTeX-mcp?style=flat)](https://github.com/ZoeLinUTS/MagicTeX-mcp/stargazers)
-[![last commit](https://img.shields.io/github/last-commit/ZoeLinUTS/MagicTeX-mcp)](https://github.com/ZoeLinUTS/MagicTeX-mcp/commits/main)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
-[![Sponsor](https://img.shields.io/badge/%E2%9D%A4-Sponsor-db61a2)](https://github.com/sponsors/ZoeLinUTS)
 
 **English** · [简体中文](docs/i18n/README.zh-CN.md) · [日本語](docs/i18n/README.ja.md) · [한국어](docs/i18n/README.ko.md) · [Español](docs/i18n/README.es.md) · [Français](docs/i18n/README.fr.md) · [Deutsch](docs/i18n/README.de.md) · [Português](docs/i18n/README.pt.md)
 
-**MagicTeX** is a **LaTeX editor built for AI agents** — an Overleaf-like
-one-window workspace for people and MCP-compatible AI agents, with **no local TeX
-install and no Overleaf account**: source editing, a source-preserving **Live visual editor**,
-exact live PDF, change history, and **comments you anchor on the rendered PDF that
-become edit instructions for the agent**. (npm package: `magictex-mcp`.)
+**TeXChronicle** is a human-first LaTeX workspace for editing, rendering, and
+recovering papers. It combines a source editor, editable Live document view,
+exact PDF preview, anchored comments, and section-aware Git history in one
+browser window. Every successful compile records the source and its exact PDF,
+without changing the paper's normal Git branches.
 
-It compiles with a WASM TeX Live 2026 engine ([texlyre-busytex](https://github.com/TeXlyre/texlyre-busytex))
-running inside a headless browser, so there's nothing multi-gigabyte to install —
-just a one-time WASM asset download.
+It works on its own—an LLM is optional. Claude Code, Codex, and other
+MCP-compatible agents can edit the same files or act on comments when useful.
+The portable Windows build includes its own compiler, browser runtime, Node, and
+Git, so recipients do not need a local TeX installation or Overleaf account.
 
-![The MagicTeX workspace: file tree, source editor, live PDF, and a reviewer comment](docs/images/workspace.png)
-
-## See it before you install
-
-A guided walkthrough of the comment → agent loop lives at
-**[zoelin.dev/tools/magictex](https://zoelin.dev/tools/magictex)**, built from real
-tool output. It's a replay, not a hosted instance — the TeX engine is a one-time
-~650 MB download and the agent half is Claude itself, so MagicTeX runs next to your
-project rather than in a web page.
+![The TeXChronicle workspace: file tree, source editor, live PDF, and a reviewer comment](docs/images/workspace.png)
 
 ## The workspace
 
@@ -73,7 +59,9 @@ anchored annotations):
   built-in editor's, or your external editor's.
 - **Section-aware change history.** Each successful compile is auto-snapshotted
   to a **hidden git ref** (`refs/latex-preview/checkpoints`) — never touching your
-  branches, `git log`, or working tree. History follows every section and
+  branches, `git log`, or working tree. Restore also captures a reversible safety
+  snapshot first, while a separate marker ensures that unrendered recovery state
+  is never mistaken for a successful PDF. History follows every section and
   subsection across edits, renames, and moves using labels plus fuzzy matching.
   Browse its own timeline, compare only its text (or its whole subtree), restore
   that part without rolling back the rest of the paper, and reopen the exact PDF
@@ -109,24 +97,40 @@ anchored annotations):
 
 ## Run the editor without an LLM
 
+### Portable Windows edition (no installation)
+
+Download `TeXChronicle-<version>-Portable-Windows-x64.zip` from the release, extract
+the whole folder, and double-click **`TeXChronicle.exe`**. It includes its own Node
+runtime, Git, headless Chromium, and the complete BusyTeX asset bundle, so the
+recipient does **not** install npm, Node, Git, Perl, or TeX and the first compile
+does not need a download. Choose a recent paper, browse to its main `.tex` file,
+or drag that file onto `TeXChronicle.exe`.
+
+This is a portable folder, not an installer: keep its subfolders beside the EXE.
+The paper's checkpoints, comments, and saved render PDFs remain in the paper's
+`.latex-preview` directory, so Dropbox or another ordinary folder synchronizer
+carries them across machines. See [the portable Windows guide](docs/PORTABLE-WINDOWS.md)
+for sharing, checksums, updates, limitations, and the reproducible build command.
+
 ### One-click launcher (Windows)
 
-After installing/linking MagicTeX, install its desktop and Start-menu shortcut once:
+After installing/linking TeXChronicle, install its desktop and Start-menu shortcut once:
 
 ```bash
-magictex install-launcher
+texchronicle install-launcher
 ```
 
-After that there is no project command to remember: click **MagicTeX** and its
+After that there is no project command to remember: click **TeXChronicle** and its
 **Recent projects** window lists papers you opened before, with **Browse…** for a
 new main `.tex` file. Double-click a paper and the browser workspace opens. You can
-also drag a `.tex` file onto the desktop shortcut. The small status window keeps the
-local workspace alive; close it when you are finished. `magictex open` presents the
+also drag a `.tex` file onto the desktop shortcut. Opening an already-running paper
+reuses its existing workspace instead of starting a competing compiler. The small status window keeps the
+local workspace alive; close it when you are finished. `texchronicle open` presents the
 same recent-project chooser.
 
 ### Terminal launch
 
-From a source checkout, install and link MagicTeX once:
+From a source checkout, install and link TeXChronicle once:
 
 ```bash
 npm install
@@ -137,13 +141,13 @@ Then run it from any LaTeX project directory:
 
 ```bash
 cd /path/to/paper
-magictex preview main.tex
+texchronicle preview main.tex
 ```
 
 The browser workspace opens and stays live while that terminal is running.
 Use **⚡ Live** for recompile-as-you-type, or **Ctrl+S** to save and compile.
 Every clean render is recorded in History. Press **Ctrl+C** to stop. For a
-project elsewhere, use `magictex preview --project /path/to/paper main.tex`.
+project elsewhere, use `texchronicle preview --project /path/to/paper main.tex`.
 
 Claude Code, Codex, and other MCP clients are optional: they can edit the same
 files while this standalone workspace is running, but they are not needed to
@@ -151,23 +155,25 @@ open or use it.
 
 ## Setup with an LLM/MCP client
 
-MagicTeX is on npm as [`magictex-mcp`](https://www.npmjs.com/package/magictex-mcp) and
-listed in the [official MCP registry](https://registry.modelcontextprotocol.io) as
-**`io.github.ZoeLinUTS/magictex`** — so any client that reads the registry can find it.
-There's nothing to clone and no TeX install; `npx` fetches it on first use.
+The package and MCP metadata now use `texchronicle` and
+`io.github.Aliutin/texchronicle`. Until the renamed package and repository are
+published, configure an MCP client from this source checkout:
 
 1. **Add it to your paper project's `.mcp.json`** (see [`.mcp.json.example`](.mcp.json.example)):
 
    ```json
    {
      "mcpServers": {
-       "magictex": { "command": "npx", "args": ["-y", "magictex-mcp"] }
+       "texchronicle": {
+         "command": "npx",
+         "args": ["tsx", "/absolute/path/to/TeXChronicle/src/server.ts"]
+       }
      }
    }
    ```
 
-   For local development from a clone, point it at the source instead:
-   `"command": "npx", "args": ["tsx", "/absolute/path/to/magictex-mcp/src/server.ts"]`
+   After an npm release, the shorter command will be
+   `"command": "npx", "args": ["-y", "texchronicle"]`.
 
 2. **Restart Claude Code** (or `/mcp` reconnect) so it picks up the server.
 
@@ -176,25 +182,25 @@ There's nothing to clone and no TeX install; `npx` fetches it on first use.
    live preview tab. Subsequent edits reload it automatically.
 
 The WASM assets are **not** in this repo. They're fetched on first run into a
-per-user cache — `~/Library/Caches/magictex` on macOS, `$XDG_CACHE_HOME/magictex`
-on Linux, `%LOCALAPPDATA%\magictex` on Windows — so upgrading MagicTeX doesn't
+per-user cache — `~/Library/Caches/texchronicle` on macOS, `$XDG_CACHE_HOME/texchronicle`
+on Linux, `%LOCALAPPDATA%\texchronicle` on Windows — so upgrading TeXChronicle doesn't
 re-download them, and a checkout, a global install and an `npx` run share one copy.
-Set `MAGICTEX_ASSETS_DIR` to put them elsewhere. To pre-fetch:
+Set `TEXCHRONICLE_ASSETS_DIR` to put them elsewhere. To pre-fetch:
 `npx texlyre-busytex download-assets <that directory>`.
 
 ## Install as a Claude Code plugin (slash commands)
 
-For a low-typing workflow, install MagicTeX as a plugin — one install gives you the
-MCP server **and** the slash commands:
+After the renamed repository is published, the optional Claude Code plugin gives
+you the MCP server **and** slash commands:
 
 ```
-/plugin marketplace add ZoeLinUTS/MagicTeX-mcp
-/plugin install magictex
+/plugin marketplace add Aliutin/TeXChronicle
+/plugin install texchronicle
 ```
 
 Then, in your paper project, use the **workflow commands** for the common flows:
 
-- **`/magic-latex`** — compile and open the workspace (the live preview).
+- **`/texchronicle`** — compile and open the workspace (the live preview).
 - **`/ai-review [skill]`** — review the paper with a skill (default
   `academic-paper-revision`; pass any skill name) and post comments for you to
   Accept/Reject. Missing skills are reported with an install hint.
@@ -226,7 +232,7 @@ single step by typing the tool name. The rule to teach: *the tool is `X` → typ
 You never *have* to type these — plain English works too (*"render a preview"*,
 *"address my comments"*). The commands are just a fast, teachable shorthand.
 
-> The plugin bundles the MCP server (`npx magictex-mcp`), so installing the plugin is
+> The plugin bundles the MCP server (`npx texchronicle`), so installing the plugin is
 > all you need — the `.mcp.json` above is the alternative if you'd rather not install
 > a plugin. The slash commands work either way.
 
@@ -240,12 +246,12 @@ plain English, or use the slash commands above — these are the underlying tool
 | `render_preview` | `mainFile?` · `engine?` (`pdflatex` \| `xelatex` \| `lualatex`, auto-detected when omitted) · `backend?` (`wasm` \| `system` \| `auto`, default `auto` — local latexmk if installed, else the bundled WASM engine) | Compiles the project and opens/refreshes the live workspace. The main file is auto-detected by scanning for `\documentclass` if omitted. |
 | `check_comments` | `includeResolved?` (default `false`) | Returns the accepted comments as located work items — page, quoted passage, the source `file:line`, and the ask. Reviewer suggestions awaiting your decision are reported but not returned as work. |
 | `add_comment` | `quote` · `comment` · `role?` (`reviewer` \| `defender`) · `page?` · `accepted?` | Anchors a comment onto a passage. Posts as a *suggestion* awaiting your Accept/Reject unless `accepted` is set — that flag is what makes autonomous mode autonomous. |
-| `resolve_comment` | `id` · `note` | Marks a comment done after the edit, with one line describing what changed. It turns **green** in the workspace for your review. |
+| `resolve_comment` | `id` · `note` | Marks a comment done after the edit, with one line describing what changed. It is accepted only when the current source exactly matches the latest successful rendered checkpoint, then turns **green** in the workspace for your review. |
 | `reply_to_comment` | `id` · `text` · `role?` (`author` \| `reviewer` \| `defender`) | Adds a threaded reply, so a disagreement can be worked out on the comment instead of in chat. |
 | `show_diff` | `checkpoint?` | Renders a side-by-side diff **as an image**, shown inline in the conversation. Defaults to the current uncommitted changes; pass a checkpoint sha for a saved version. |
 | `list_checkpoints` | `limit?` (default 10, max 50) | Recent checkpoints with their sha, newest first — use it to find one to pass to `show_diff`. |
 
-**The headline workflows are built on top of these, not among them.** `/magic-latex`,
+**The headline workflows are built on top of these, not among them.** `/texchronicle`,
 `/ai-review`, `/address-comments` and ⚡ `/ultra-agents` are Claude Code plugin
 commands that orchestrate the tools above — `/ultra-agents` chains review →
 auto-accept → fix for as many rounds as you allow, and is the reason `add_comment`
@@ -261,7 +267,7 @@ workspace (screenshot above) reflects the same state live.
 
 You type:
 ```
-/magic-latex
+/texchronicle
 ```
 Claude calls `render_preview` and replies:
 ```
@@ -341,6 +347,10 @@ the comment loop, the review workflow, and traceable history possible.
 
 ## Requirements
 
+The requirements below apply to the npm/source installation. The Windows
+portable release carries these runtimes itself and needs only 64-bit Windows 10
+or later plus a normal web browser for the workspace window.
+
 - Node 20.19+ (the floor `chokidar` and `playwright` actually need; the server checks at startup and says so)
 - Playwright's Chromium (installed automatically; ~150–300 MB) — or set it to reuse
   your installed Chrome.
@@ -348,8 +358,8 @@ the comment loop, the review workflow, and traceable history possible.
   first run, in three package sets (basic 87 MB, recommended 190 MB, extra 324 MB,
   plus the 31 MB engine). A normal paper only *loads* the basic set; the larger two
   sit on disk until something needs them. Cached per user, not per install, so
-  upgrading MagicTeX doesn't re-download them. Override the location with
-  `MAGICTEX_ASSETS_DIR`.
+  upgrading TeXChronicle doesn't re-download them. Override the location with
+  `TEXCHRONICLE_ASSETS_DIR`.
 - **A local TeX install is optional.** See below for when it matters.
 
 ### Do I need a local TeX distribution?
@@ -360,7 +370,7 @@ most venue document classes, and various less common packages. When one is
 missing you'll be told, rather than handed a silently wrong PDF.
 
 Install a distribution when you want output that matches Overleaf exactly.
-MagicTeX picks it up on its own — no configuration:
+TeXChronicle picks it up on its own — no configuration:
 
 | | |
 |---|---|
@@ -369,7 +379,7 @@ MagicTeX picks it up on its own — no configuration:
 | Windows | [TeX Live](https://tug.org/texlive/), or [MiKTeX](https://miktex.org/) **plus** [Strawberry Perl](https://strawberryperl.com/) |
 
 > `latexmk` is not installed on its own — it is a driver script that comes with
-> the distributions above. On Windows, MagicTeX also discovers the standard
+> the distributions above. On Windows, TeXChronicle also discovers the standard
 > per-user/system MiKTeX and Strawberry Perl locations directly, so a stale or
 > incomplete `PATH` does not force the bundled compiler. Elsewhere, check with
 > **`latexmk -version`**, not `which latexmk`: finding the file does not prove it
@@ -422,24 +432,13 @@ corrupting comments or the checkpoint history (see [`docs/ROADMAP.md`](docs/ROAD
 — true parallel multi-agent editing (reviewer/author/defender on their own git branches,
 merged back together) is the next milestone.
 
-## Sponsor this project
-
-MagicTeX is free and open source (AGPL-3.0). If it saves you time on your papers,
-please consider **[sponsoring the project](https://github.com/sponsors/ZoeLinUTS)** —
-it funds continued development. A ⭐ on the repo helps too.
-
 ## Acknowledgements
 
-MagicTeX is written and maintained by [Zoe Lin](https://zoelin.dev), built with
-**[Claude Code](https://claude.com/claude-code)**.
+TeXChronicle began as a fork of [MagicTeX MCP](https://github.com/ZoeLinUTS/MagicTeX-mcp) by Zoe Lin and contributors, and has since been substantially redesigned around human-first editing and section-level history. See [NOTICE.md](NOTICE.md) for provenance.
 
-Thanks to **David Turnbull**, who told me the story of Knuth spending ten years
-building his own typesetter rather than accept how his book looked — the story this
-project keeps arguing with. And to the maintainers of
-[`texlyre-busytex`](https://github.com/TeXlyre/texlyre-busytex), without whose WASM
-TeX Live none of this would run locally at all.
+Thanks also to the maintainers of [texlyre-busytex](https://github.com/TeXlyre/texlyre-busytex), whose WASM TeX Live engine powers the bundled compiler.
 
 ## License
 
 [AGPL-3.0-or-later](LICENSE) — matching the `texlyre-busytex` engine it builds on.
-See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+See [`NOTICE.md`](NOTICE.md) and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

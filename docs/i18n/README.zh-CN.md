@@ -1,33 +1,23 @@
-# MagicTeX — 面向 AI Agent 的 LaTeX 编辑器
+# TeXChronicle — 面向 AI Agent 的 LaTeX 编辑器
 
 <!-- badges -->
-[![npm](https://img.shields.io/npm/v/magictex-mcp?logo=npm)](https://www.npmjs.com/package/magictex-mcp)
-[![MCP registry](https://img.shields.io/badge/MCP%20registry-io.github.ZoeLinUTS%2Fmagictex-6f42c1)](https://registry.modelcontextprotocol.io)
-[![CI](https://github.com/ZoeLinUTS/MagicTeX-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ZoeLinUTS/MagicTeX-mcp/actions/workflows/ci.yml)
-[![stars](https://img.shields.io/github/stars/ZoeLinUTS/MagicTeX-mcp?style=flat)](https://github.com/ZoeLinUTS/MagicTeX-mcp/stargazers)
-[![last commit](https://img.shields.io/github/last-commit/ZoeLinUTS/MagicTeX-mcp)](https://github.com/ZoeLinUTS/MagicTeX-mcp/commits/main)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-blue)](../../LICENSE)
-[![Sponsor](https://img.shields.io/badge/%E2%9D%A4-Sponsor-db61a2)](https://github.com/sponsors/ZoeLinUTS)
+
+> The product name is current, but this translation still contains pre-release installation details. See the [English README](../../README.md) for the current portable/source setup and publishing status.
 
 [English](../../README.md) · **简体中文** · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md)
 
-![MagicTeX workspace](../images/workspace.png)
+![TeXChronicle workspace](../images/workspace.png)
 
-**MagicTeX** 是一个**为 AI Agent 打造的 LaTeX 编辑器**——一个类 Overleaf 的
+**TeXChronicle** 是一个**为 AI Agent 打造的 LaTeX 编辑器**——一个类 Overleaf 的
 **单窗口工作区**，通过 MCP 服务器接入 Claude Code，**无需本地安装 TeX，也无需
 Overleaf 账号**：实时 PDF 预览、带**可视化（所见即所得）模式**的源码编辑器、修改历史，
 以及**你在渲染后的 PDF 上锚定的评论——它们会直接变成 Agent 的修改指令**。（npm 包名：
-`magictex-mcp`。）
+`texchronicle`。）
 
 它用运行在无头浏览器里的 WASM TeX Live 2026 引擎
 （[texlyre-busytex](https://github.com/TeXlyre/texlyre-busytex)）编译，因此没有几个 GB
 的东西要装——只有一次性的 WASM 资源下载。
-
-## 安装前先看一眼
-
-**[zoelin.dev/tools/magictex](https://zoelin.dev/tools/magictex)** 上有一个「评论 → agent」
-闭环的分步演示，全部内容取自真实工具输出。它是回放，不是在线实例——TeX 引擎需要一次性下载
-约 650 MB，而 agent 那一半就是 Claude 本身，所以 MagicTeX 运行在你的项目旁边，而不是网页里。
 
 ## 工作区
 
@@ -83,9 +73,9 @@ Overleaf 账号**：实时 PDF 预览、带**可视化（所见即所得）模�
 
 ## 安装
 
-MagicTeX 在 npm 上叫 [`magictex-mcp`](https://www.npmjs.com/package/magictex-mcp)，也已登记在
+TeXChronicle 在 npm 上叫 [`texchronicle`](https://www.npmjs.com/package/texchronicle)，也已登记在
 [官方 MCP registry](https://registry.modelcontextprotocol.io) 里，标识是
-**`io.github.ZoeLinUTS/magictex`** —— 任何会读 registry 的客户端都能找到它。没有仓库要克隆，
+**`io.github.Aliutin/texchronicle`** —— 任何会读 registry 的客户端都能找到它。没有仓库要克隆，
 也不需要装 TeX；`npx` 会在第一次使用时把它取下来。
 
 1. 在你的论文项目的 `.mcp.json` 中加入（见 [`.mcp.json.example`](../../.mcp.json.example)）：
@@ -93,7 +83,7 @@ MagicTeX 在 npm 上叫 [`magictex-mcp`](https://www.npmjs.com/package/magictex-
    ```json
    {
      "mcpServers": {
-       "magictex": { "command": "npx", "args": ["-y", "magictex-mcp"] }
+       "texchronicle": { "command": "npx", "args": ["-y", "texchronicle"] }
      }
    }
    ```
@@ -103,24 +93,24 @@ MagicTeX 在 npm 上叫 [`magictex-mcp`](https://www.npmjs.com/package/magictex-
    （约 650 MB，一次性），编译并打开实时预览。之后的修改会自动刷新。
 
    从克隆的仓库做本地开发时，改成指向源码：
-   `"command": "npx", "args": ["tsx", "/绝对路径/magictex-mcp/src/server.ts"]`
+   `"command": "npx", "args": ["tsx", "/绝对路径/texchronicle/src/server.ts"]`
 
 WASM 资源**不在**这个仓库里。它们在首次运行时被下载到一个**按用户**的缓存目录 ——
-macOS 上是 `~/Library/Caches/magictex`，Linux 上是 `$XDG_CACHE_HOME/magictex`，
-Windows 上是 `%LOCALAPPDATA%\magictex` —— 所以升级 MagicTeX 不会重新下载，而一份克隆、
-一次全局安装和一次 `npx` 运行共用同一份拷贝。用 `MAGICTEX_ASSETS_DIR` 可以放到别处。
+macOS 上是 `~/Library/Caches/texchronicle`，Linux 上是 `$XDG_CACHE_HOME/texchronicle`，
+Windows 上是 `%LOCALAPPDATA%\texchronicle` —— 所以升级 TeXChronicle 不会重新下载，而一份克隆、
+一次全局安装和一次 `npx` 运行共用同一份拷贝。用 `TEXCHRONICLE_ASSETS_DIR` 可以放到别处。
 想预先下载：`npx texlyre-busytex download-assets <那个目录>`。
 
 ## 作为 Claude Code 插件安装（斜杠命令）
 
-想少打字，就把 MagicTeX 装成插件——一次安装即同时获得 MCP 服务器与斜杠命令：
+想少打字，就把 TeXChronicle 装成插件——一次安装即同时获得 MCP 服务器与斜杠命令：
 
 ```
-/plugin marketplace add ZoeLinUTS/MagicTeX-mcp
-/plugin install magictex
+/plugin marketplace add Aliutin/TeXChronicle
+/plugin install texchronicle
 ```
 
-- **`/magic-latex`** — 编译并打开工作区。
+- **`/texchronicle`** — 编译并打开工作区。
 - **`/ai-review [skill]`** — 用某个 skill 审阅论文（默认 `academic-paper-revision`，
   也可传入任意 skill 名）并留下评论供你确认；skill 未安装时会给出安装提示。
 - **`/address-comments`** — 解决你已接受的评论（可 `/loop 60s /address-comments`）。
@@ -145,7 +135,7 @@ Windows 上是 `%LOCALAPPDATA%\magictex` —— 所以升级 MagicTeX 不会重�
 
 其实不打命令也行——直接说人话同样有效（“渲染预览”、“处理我的评论”）。命令只是更快、更好教的简写。
 
-> 插件里已经打包了 MCP 服务器（`npx magictex-mcp`），所以装了插件就够了 —— 上面那段
+> 插件里已经打包了 MCP 服务器（`npx texchronicle`），所以装了插件就够了 —— 上面那段
 > `.mcp.json` 是「不想装插件」时的替代方案。两种方式下斜杠命令都能用。
 
 ## Tools（工具）
@@ -162,7 +152,7 @@ Windows 上是 `%LOCALAPPDATA%\magictex` —— 所以升级 MagicTeX 不会重�
 | `show_diff` | `checkpoint?` | 把并排 diff 渲染成**图片**，直接显示在对话里。默认是当前未提交的改动；传 checkpoint sha 可看某个存档版本。 |
 | `list_checkpoints` | `limit?`（默认 10，最大 50） | 列出最近的 checkpoint 及其 sha，最新在前——用它找到要传给 `show_diff` 的那个。 |
 
-**核心卖点建立在这些工具之上，而不在这张表里。** `/magic-latex`、`/ai-review`、`/address-comments` 和 ⚡ `/ultra-agents` 是 Claude Code 的**插件命令**，负责编排上面这些工具——`/ultra-agents` 会把「评审 → 自动接受 → 修复」串成循环，跑满你允许的轮数，`add_comment` 的 `accepted` 参数正是为它而设。它们不属于 MCP 接口层，所以其他 MCP 客户端只会看到这 7 个工具。详见上面的插件小节和 [docs/AGENT-LOOP.zh-CN.md](AGENT-LOOP.zh-CN.md)。
+**核心卖点建立在这些工具之上，而不在这张表里。** `/texchronicle`、`/ai-review`、`/address-comments` 和 ⚡ `/ultra-agents` 是 Claude Code 的**插件命令**，负责编排上面这些工具——`/ultra-agents` 会把「评审 → 自动接受 → 修复」串成循环，跑满你允许的轮数，`add_comment` 的 `accepted` 参数正是为它而设。它们不属于 MCP 接口层，所以其他 MCP 客户端只会看到这 7 个工具。详见上面的插件小节和 [docs/AGENT-LOOP.zh-CN.md](AGENT-LOOP.zh-CN.md)。
 
 ## 在终端里长什么样
 
@@ -171,7 +161,7 @@ Windows 上是 `%LOCALAPPDATA%\magictex` —— 所以升级 MagicTeX 不会重�
 
 你输入：
 ```
-/magic-latex
+/texchronicle
 ```
 Claude 调用 `render_preview`，回复：
 ```
@@ -255,7 +245,7 @@ flowchart LR
 - 约 650 MB 磁盘用于一次性的 WASM TeX Live 资源 —— 首次运行全部下载，分三个包集
   （basic 87 MB、recommended 190 MB、extra 324 MB，外加 31 MB 引擎）。普通论文只会
   *加载* basic 那一份，另外两个躺在磁盘上直到有东西需要它们。按用户缓存而不是按安装缓存，
-  所以升级 MagicTeX 不会重新下载。用 `MAGICTEX_ASSETS_DIR` 可以改位置。
+  所以升级 TeXChronicle 不会重新下载。用 `TEXCHRONICLE_ASSETS_DIR` 可以改位置。
 - **本机 TeX 发行版是可选的。** 什么时候有必要，见下。
 
 ### 我需要本机装 TeX 吗？
@@ -264,7 +254,7 @@ flowchart LR
 的一个*子集*：`svg`、大多数会议文档类，以及一些不那么常见的宏包都不在里面。缺了
 的时候会明确告诉你，而不是默默给你一份错的 PDF。
 
-当你需要和 Overleaf 完全一致的输出时再装。MagicTeX 会自动发现并使用它，无需配置：
+当你需要和 Overleaf 完全一致的输出时再装。TeXChronicle 会自动发现并使用它，无需配置：
 
 | | |
 |---|---|
@@ -272,7 +262,7 @@ flowchart LR
 | Linux | `texlive-full` |
 | Windows | [TeX Live](https://tug.org/texlive/), or [MiKTeX](https://miktex.org/) **plus** [Strawberry Perl](https://strawberryperl.com/) |
 
-> MagicTeX 在 `PATH` 上找的是 `latexmk`，但它**不是一个可以单独安装的东西** ——
+> TeXChronicle 在 `PATH` 上找的是 `latexmk`，但它**不是一个可以单独安装的东西** ——
 > 它是上面这些发行版自带的驱动脚本。确认要用 **`latexmk -version`**,不要用
 > `which latexmk`:`latexmk` 是个 Perl 脚本,而 MiKTeX 会把 `latexmk.exe` 放进
 > `PATH` 却不带能跑它的 Perl —— 文件找得到,照样执行不了。macOS 上可能要先跑
@@ -319,19 +309,11 @@ npm start            # 在 stdio 上运行服务器（供手动的 MCP 客户端
 （见 [`ROADMAP.zh-CN.md`](ROADMAP.zh-CN.md)）—— 真正的并行 multi-agent 编辑
 （reviewer / author / defender 各自在自己的 git 分支上工作，最后合并回来）是下一个里程碑。
 
-## 赞助本项目
-
-MagicTeX 是免费开源的（AGPL-3.0）。如果它为你的论文节省了时间，欢迎
-**[赞助本项目](https://github.com/sponsors/ZoeLinUTS)**，这将支持它持续开发。给仓库点个
-⭐ 也很有帮助。
-
 ## 致谢
 
-MagicTeX 由 [Zoe Lin](https://zoelin.dev) 编写和维护，使用 **[Claude Code](https://claude.com/claude-code)** 开发。
+TeXChronicle began as a fork of [MagicTeX MCP](https://github.com/ZoeLinUTS/MagicTeX-mcp) by Zoe Lin and contributors, and has since been substantially redesigned around human-first editing and section-level history. See [NOTICE.md](../../NOTICE.md) for provenance.
 
-感谢 **David Turnbull**，是他告诉我 Knuth 宁可花十年自己造一套排版系统，也不接受自己
-的书排成那样 —— 这个项目至今仍在跟这个故事较劲。也感谢 [`texlyre-busytex`](https://github.com/TeXlyre/texlyre-busytex) 的维护者们，没有那份
-WASM 版 TeX Live，这里在本地一行都跑不起来。
+Thanks also to the maintainers of [texlyre-busytex](https://github.com/TeXlyre/texlyre-busytex), whose WASM TeX Live engine powers the bundled compiler.
 
 ## 许可证
 

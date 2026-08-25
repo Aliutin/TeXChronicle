@@ -4,7 +4,7 @@
 // each compile always reads the latest files off disk.
 import { compileProject, type CompileProjectResult, type Engine, type Backend } from './project/compileProject.js';
 import { getPreview } from './engine/browserHost.js';
-import { createCheckpoint, createCheckpointFromPrepared, prepareCheckpoint } from './git/checkpoints.js';
+import { createCheckpointFromPrepared, prepareCheckpoint } from './git/checkpoints.js';
 import { saveRenderArtifact } from './git/renderArtifacts.js';
 import { setProjectRoot } from './session.js';
 
@@ -44,6 +44,7 @@ async function doCompile(): Promise<CompileProjectResult> {
   }));
   const result = await compileProject(config);
   const clean = result.success && (!result.verdict || result.verdict.errors.length === 0);
+  let renderedCheckpoint: string | undefined;
 
   if (result.success && result.pdf) {
     // LaTeX often "recovers" from an error and still emits a PDF — just a
@@ -63,11 +64,10 @@ async function doCompile(): Promise<CompileProjectResult> {
       // Only clean runs earn a checkpoint: History exists so you can return to
       // a state that worked, and snapshotting source that compiles with errors
       // would dilute exactly that promise.
-      if (clean) {
-        const checkpoint = prepared.tree
-          ? await createCheckpointFromPrepared(config.projectRoot, prepared.tree)
-          : await createCheckpoint(config.projectRoot);
-        if (checkpoint.sha && prepared.tree) {
+      if (clean && prepared.tree) {
+        const checkpoint = await createCheckpointFromPrepared(config.projectRoot, prepared.tree);
+        if (checkpoint.sha) {
+          renderedCheckpoint = checkpoint.sha;
           // A render is an immutable view of one source checkpoint. PDF bytes
           // live outside Git (binary history grows quickly) but beside the
           // project, keyed by the checkpoint SHA, so Dropbox carries both.
@@ -78,7 +78,10 @@ async function doCompile(): Promise<CompileProjectResult> {
           }).catch(() => {}); // history/artifact failure never turns a good compile into a bad one
         }
       }
-      await preview.setLatestPdf(result.pdf, result.mainFile, result.syncTex);
+      // The checkpoint travels with the PDF. When preparation failed or files
+      // changed during compilation it is deliberately absent, so comment
+      // resolution/verification cannot claim an identity we did not prove.
+      await preview.setLatestPdf(result.pdf, result.mainFile, result.syncTex, renderedCheckpoint);
       lastPublishWasClean = clean;
     }
     if (!clean) {

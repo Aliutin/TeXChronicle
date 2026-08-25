@@ -40,7 +40,7 @@ test('an install that already has the assets keeps using them', async () => {
 });
 
 test('a fresh install resolves outside the package directory', async () => {
-  // The whole point: `npx magictex-mcp` installs into a cache entry npm
+  // The whole point: `npx texchronicle` installs into a cache entry npm
   // replaces wholesale on upgrade. Assets stored under it are deleted every
   // release, which is the 480 MB re-download this avoids.
   const { mod, root, cleanup } = await loadIn({ withAssets: false });
@@ -57,16 +57,33 @@ test('a fresh install resolves outside the package directory', async () => {
   }
 });
 
-test('MAGICTEX_ASSETS_DIR overrides even when the package has its own copy', async () => {
-  const prev = process.env.MAGICTEX_ASSETS_DIR;
-  process.env.MAGICTEX_ASSETS_DIR = join(tmpdir(), 'chosen-by-hand');
+test('TEXCHRONICLE_ASSETS_DIR overrides even when the package has its own copy', async () => {
+  const prev = process.env.TEXCHRONICLE_ASSETS_DIR;
+  process.env.TEXCHRONICLE_ASSETS_DIR = join(tmpdir(), 'chosen-by-hand');
   const { mod, cleanup } = await loadIn({ withAssets: true });
   try {
     assert.equal(mod.busytexDir(), join(tmpdir(), 'chosen-by-hand'));
   } finally {
     cleanup();
-    if (prev === undefined) delete process.env.MAGICTEX_ASSETS_DIR;
-    else process.env.MAGICTEX_ASSETS_DIR = prev;
+    if (prev === undefined) delete process.env.TEXCHRONICLE_ASSETS_DIR;
+    else process.env.TEXCHRONICLE_ASSETS_DIR = prev;
+  }
+});
+
+test('the former assets environment variable remains a migration alias', async () => {
+  const current = process.env.TEXCHRONICLE_ASSETS_DIR;
+  const legacy = process.env.MAGICTEX_ASSETS_DIR;
+  delete process.env.TEXCHRONICLE_ASSETS_DIR;
+  process.env.MAGICTEX_ASSETS_DIR = join(tmpdir(), 'legacy-choice');
+  const { mod, cleanup } = await loadIn({ withAssets: true });
+  try {
+    assert.equal(mod.busytexDir(), join(tmpdir(), 'legacy-choice'));
+  } finally {
+    cleanup();
+    if (current === undefined) delete process.env.TEXCHRONICLE_ASSETS_DIR;
+    else process.env.TEXCHRONICLE_ASSETS_DIR = current;
+    if (legacy === undefined) delete process.env.MAGICTEX_ASSETS_DIR;
+    else process.env.MAGICTEX_ASSETS_DIR = legacy;
   }
 });
 

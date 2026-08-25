@@ -65,8 +65,8 @@ Der Kommentar-Posteingang hat drei Zustände, die einen ganzen Review-Zyklus ver
    landet (violett gestrichelte Hervorhebung im PDF, eine Karte im Abschnitt *Suggested*):
 
    ```
-   Review my paper using my academic-paper-revision skill
-   (github.com/ZoeLinUTS/Academic-paper-revision). For each issue, call add_comment
+   Review my paper using my installed academic-review skill.
+   For each issue, call add_comment
    with the exact quoted passage and your comment. Don't edit the source yet.
    ```
 
@@ -88,7 +88,7 @@ Der Kommentar-Posteingang hat drei Zustände, die einen ganzen Review-Zyklus ver
 ## Ultra-agents ⚡
 
 > [!CAUTION]
-> Das ist MagicTeX' mächtigster Befehl und zugleich der am wenigsten beaufsichtigte — bewusst ohne
+> Das ist TeXChronicle' mächtigster Befehl und zugleich der am wenigsten beaufsichtigte — bewusst ohne
 > Freigabe von dir zwischen den Runden. Lies diesen Abschnitt ganz, bevor du ihn mit hohem `depth`
 > ausführst.
 

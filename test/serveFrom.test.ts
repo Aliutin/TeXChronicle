@@ -15,12 +15,12 @@ import { startPreviewServer, type PreviewServerHandle } from '../src/preview/pre
 
 const trash: string[] = [];
 
-/** What `MAGICTEX_ASSETS_DIR` points at: the directory holding busytex.wasm
+/** What `TEXCHRONICLE_ASSETS_DIR` points at: the directory holding busytex.wasm
  *  itself. `/busytex/<rel>` is served from it directly — a first version of this
  *  test nested the file one level deeper and everything 404'd, including the
  *  case that was supposed to pass. */
 function assetsDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'magictex-assets-'));
+  const dir = mkdtempSync(join(tmpdir(), 'texchronicle-assets-'));
   trash.push(dir);
   writeFileSync(join(dir, 'busytex.wasm'), 'WASM BYTES');
   return dir;
@@ -42,21 +42,21 @@ function rawGet(port: number, path: string): Promise<{ status: number; body: str
 }
 
 async function withServer(assets: string, fn: (h: PreviewServerHandle) => Promise<void>): Promise<void> {
-  const prev = process.env.MAGICTEX_ASSETS_DIR;
-  process.env.MAGICTEX_ASSETS_DIR = assets;
+  const prev = process.env.TEXCHRONICLE_ASSETS_DIR;
+  process.env.TEXCHRONICLE_ASSETS_DIR = assets;
   let handle: PreviewServerHandle | undefined;
   try {
     handle = await startPreviewServer();
     await fn(handle);
   } finally {
     await handle?.close().catch(() => {});
-    if (prev === undefined) delete process.env.MAGICTEX_ASSETS_DIR; else process.env.MAGICTEX_ASSETS_DIR = prev;
+    if (prev === undefined) delete process.env.TEXCHRONICLE_ASSETS_DIR; else process.env.TEXCHRONICLE_ASSETS_DIR = prev;
     for (const p of trash.splice(0)) rmSync(p, { recursive: true, force: true });
   }
 }
 
 test('an assets directory written with forward slashes still serves', async () => {
-  // The path in MAGICTEX_ASSETS_DIR is typed by a human, and the natural place
+  // The path in TEXCHRONICLE_ASSETS_DIR is typed by a human, and the natural place
   // to put it is a JSON config — where a backslash has to be doubled and a
   // forward slash does not. `join`/`normalize` return the platform separator, so
   // on Windows the resolved file had backslashes and the root did not; the

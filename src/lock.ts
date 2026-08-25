@@ -1,4 +1,4 @@
-// Cross-PROCESS mutex for MagicTeX's shared on-disk state (comments.json, the
+// Cross-PROCESS mutex for TeXChronicle's shared on-disk state (comments.json, the
 // checkpoint git ref). Each Claude Code session spawns its own `tsx server.ts`
 // process (stdio MCP = one child per client), so an in-process lock (a promise
 // chain, a module-level flag) does nothing once a second agent is a second
@@ -12,8 +12,8 @@ const STALE_MS = 30_000; // a real critical section here is well under 1s
 const POLL_MS = 75;
 const TIMEOUT_MS = 15_000;
 
-function lockPath(root: string): string {
-  return join(root, '.latex-preview', '.lock');
+function lockPath(root: string, name: string): string {
+  return join(root, '.latex-preview', name);
 }
 
 function isAlive(pid: number): boolean {
@@ -30,8 +30,8 @@ async function clearIfStale(path: string): Promise<void> {
   if (!isAlive(pid) || ageMs > STALE_MS) await rm(path, { force: true });
 }
 
-async function acquire(root: string): Promise<string> {
-  const path = lockPath(root);
+async function acquire(root: string, name: string): Promise<string> {
+  const path = lockPath(root, name);
   await mkdir(dirname(path), { recursive: true }); // fresh project: no .latex-preview/ yet
   const deadline = Date.now() + TIMEOUT_MS;
   for (;;) {
@@ -55,7 +55,23 @@ async function acquire(root: string): Promise<string> {
  *  Callers that already hold the lock must NOT call this again (not reentrant) —
  *  compose by calling the unlocked inner function instead (see checkpoints.ts). */
 export async function withLock<T>(root: string, fn: () => Promise<T>): Promise<T> {
-  const path = await acquire(root);
+  const path = await acquire(root, '.lock');
+  try {
+    return await fn();
+  } finally {
+    await rm(path, { force: true });
+  }
+}
+
+/**
+ * First-time shadow-repository setup needs its own lock. It can be reached both
+ * from inside `withLock` (a compile/checkpoint) and outside it (History/status
+ * API reads), so reusing `.lock` here would deadlock. The separate name makes
+ * first initialization single-file across TeXChronicle processes while leaving
+ * the normal checkpoint critical section unchanged.
+ */
+export async function withHistoryInitLock<T>(root: string, fn: () => Promise<T>): Promise<T> {
+  const path = await acquire(root, '.history-init.lock');
   try {
     return await fn();
   } finally {

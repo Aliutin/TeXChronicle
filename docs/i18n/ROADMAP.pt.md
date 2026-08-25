@@ -2,9 +2,9 @@
 
 [English](../ROADMAP.md) · [简体中文](ROADMAP.zh-CN.md) · [日本語](ROADMAP.ja.md) · [한국어](ROADMAP.ko.md) · [Español](ROADMAP.es.md) · [Français](ROADMAP.fr.md) · [Deutsch](ROADMAP.de.md) · **Português**
 
-## Já disponível: uso concorrente seguro do próprio estado do MagicTeX
+## Já disponível: uso concorrente seguro do próprio estado do TeXChronicle
 
-Cada sessão do Claude Code que se conecta ao servidor MCP `magictex` de um projeto inicia seu **próprio processo separado** (MCP via stdio = um processo filho por cliente) — então duas sessões trabalhando no mesmo artigo não compartilham nenhum estado em memória. Nada impedia que as duas competissem pelos mesmos arquivos em disco.
+Cada sessão do Claude Code que se conecta ao servidor MCP `texchronicle` de um projeto inicia seu **próprio processo separado** (MCP via stdio = um processo filho por cliente) — então duas sessões trabalhando no mesmo artigo não compartilham nenhum estado em memória. Nada impedia que as duas competissem pelos mesmos arquivos em disco.
 
 - **Trava entre processos** (`src/lock.ts`) — um arquivo de trava exclusiva em `.latex-preview/.lock`, adquirida por criação atômica (`O_EXCL`), com recuperação de travas obsoletas (um PID dono já morto, ou uma trava com mais de 30s, é limpa automaticamente, para que um agente que travou não bloqueie os outros para sempre).
 - **O que é protegido**: `add_comment` / `resolve_comment` / `reply_to_comment` / rejeitar-e-excluir (todos os mutadores de `commentsStore.ts`) e a criação/restauração de checkpoints (`createCheckpoint`, `restoreCheckpoint`, `restoreFile`) — cada um agora executa seu ciclo completo de ler-modificar-escrever como uma única seção crítica entre processos, em vez de ler → modificar → escrever sem exclusão.

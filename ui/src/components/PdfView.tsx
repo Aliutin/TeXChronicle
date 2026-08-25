@@ -17,7 +17,7 @@ interface SyncTarget { text: string; nonce: number }
 
 export function PdfView({
   reloadTick, pdfUrl = '/latest.pdf', historicalLabel, onReturnLatest,
-  comments, onPages, onSelectComment, onSyncToSource, syncTarget, missingMessage,
+  comments, onPages, onSelectComment, onSyncToSource, syncTarget, missingMessage, pdfCheckpoint,
 }: {
   reloadTick: number;
   pdfUrl?: string;
@@ -29,6 +29,9 @@ export function PdfView({
   onSyncToSource?: (target: { text: string } & Partial<SyncTeXSourceLocation>) => void;
   syncTarget?: SyncTarget | null;
   missingMessage?: string;
+  /** Checkpoint that produced the live PDF. Frozen rectangles are safe only on
+   * that exact version; later versions must successfully re-anchor the quote. */
+  pdfCheckpoint?: string;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pagesRef = useRef<HTMLDivElement>(null);
@@ -143,7 +146,7 @@ export function PdfView({
           const cols = columnsFromTextItems(content.items, pg.getViewport({ scale: 1 }).height);
           wrap.dataset.columns = JSON.stringify(cols);
         } catch (e) {
-          console.warn(`[magictex] column detection skipped — ${step}`, e);
+          console.warn(`[texchronicle] column detection skipped — ${step}`, e);
         }
         if (!hadPages) {
           // Moving the wrapper out of the fragment makes the page visible;
@@ -167,12 +170,12 @@ export function PdfView({
       // a reload could reject AFTER a newer run had rendered fine and paint a
       // full failure report over it — styled, deliberately, to be screenshotted
       // into a bug report. The reporting work manufacturing false reports.
-      if (cancelled) { console.warn('[MagicTeX] superseded render failed during: ' + step, e); return; }
+      if (cancelled) { console.warn('[TeXChronicle] superseded render failed during: ' + step, e); return; }
       // The console gets the error object itself, so DevTools can offer a real
       // clickable stack; the pane gets a report someone can screenshot. A
       // screenshot is what actually reaches a maintainer, so it has to carry
       // enough on its own — which step, which browser, which pdf.js.
-      console.error('[MagicTeX] PDF render failed during: ' + step, e);
+      console.error('[TeXChronicle] PDF render failed during: ' + step, e);
       const err = e as { message?: string; stack?: string; name?: string };
       // pdf.js re-creates worker exceptions on this side of a postMessage, and a
       // stack does not survive that trip — so for the errors most worth
@@ -458,7 +461,9 @@ export function PdfView({
         if (!layer) continue;
         const boxes = liveBoxes(pageEl!, c.quote);
         if (boxes) for (const b of boxes) box(layer, c, statusCls, b.l, b.t, b.w, b.h);
-        else for (const r of c.rects) box(layer, c, statusCls, r.x * scale, r.y * scale, r.w * scale, r.h * scale);
+        else if (c.createdCheckpoint && c.createdCheckpoint === pdfCheckpoint) {
+          for (const r of c.rects) box(layer, c, statusCls, r.x * scale, r.y * scale, r.w * scale, r.h * scale);
+        }
         continue;
       }
       // Reviewer/agent comment posted without PDF coords → find the quote anywhere.
@@ -470,7 +475,7 @@ export function PdfView({
         break;
       }
     }
-  }, [comments, renderTick, scale, onSelectComment]);
+  }, [comments, renderTick, scale, onSelectComment, pdfCheckpoint]);
 
   // ── Selection → comment composer ────────────────────────────────────────
   const onMouseUp = () => {

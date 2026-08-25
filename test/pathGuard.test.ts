@@ -14,7 +14,7 @@ import { readTextFile, writeTextFile, deleteEntry, renameEntry, createTextFile, 
 // follows it out of the project. writeFile follows it the other way.
 
 function project() {
-  const base = mkdtempSync(join(tmpdir(), 'magictex-guard-'));
+  const base = mkdtempSync(join(tmpdir(), 'texchronicle-guard-'));
   const root = join(base, 'paper');
   const outside = join(base, 'secrets');
   mkdirSync(root);
@@ -50,13 +50,55 @@ test('project artwork resolves with omitted extensions and included-file paths',
   assert.equal(fromInclude.relativePath, 'figures/result.png');
 });
 
+test('project artwork honors graphicspath declared by the TeX source', async () => {
+  const { root } = project();
+  mkdirSync(join(root, 'Figures'));
+  writeFileSync(join(root, 'Figures', 'fig1_delta_candidate.pdf'), Buffer.from('%PDF-1.4'));
+  writeFileSync(join(root, 'main.tex'), String.raw`\graphicspath{{./Figures/}{../Figures/}}
+\includegraphics[width=\linewidth]{fig1_delta_candidate.pdf}
+`);
+
+  const asset = await resolveAssetFile(root, 'fig1_delta_candidate.pdf', 'main.tex');
+  assert.equal(asset.fullPath, join(root, 'Figures', 'fig1_delta_candidate.pdf'));
+  assert.equal(asset.relativePath, 'Figures/fig1_delta_candidate.pdf');
+});
+
+test('an exact TeX-referenced graphicspath asset may live outside a plain project folder', async () => {
+  const { base, root } = project();
+  const figures = join(base, 'shared-figures');
+  mkdirSync(figures);
+  writeFileSync(join(figures, 'map.pdf'), Buffer.from('%PDF-1.4'));
+  writeFileSync(join(figures, 'unreferenced.pdf'), Buffer.from('%PDF-1.4'));
+  writeFileSync(join(root, 'main.tex'), String.raw`\graphicspath{{../shared-figures/}}
+\includegraphics{map.pdf}
+`);
+
+  const asset = await resolveAssetFile(root, 'map.pdf', 'main.tex');
+  assert.equal(asset.fullPath, join(figures, 'map.pdf'));
+  await assert.rejects(
+    () => resolveAssetFile(root, 'unreferenced.pdf', 'main.tex'),
+    /outside|not found/,
+  );
+});
+
+test('commented includegraphics does not authorize an external asset', async () => {
+  const { base, root } = project();
+  const figures = join(base, 'shared-figures');
+  mkdirSync(figures);
+  writeFileSync(join(figures, 'private.pdf'), Buffer.from('%PDF-1.4'));
+  writeFileSync(join(root, 'main.tex'), String.raw`\graphicspath{{../shared-figures/}}
+% \includegraphics{private.pdf}
+`);
+  await assert.rejects(() => resolveAssetFile(root, 'private.pdf', 'main.tex'), /outside|not found/);
+});
+
 test('project artwork cannot escape through traversal', async () => {
   const { root } = project();
   await assert.rejects(() => resolveAssetFile(root, '../secrets/id_rsa.png'), /outside/);
 });
 
 test('a nested LaTeX draft can preview sibling artwork inside its Git project', async () => {
-  const base = mkdtempSync(join(tmpdir(), 'magictex-asset-repo-'));
+  const base = mkdtempSync(join(tmpdir(), 'texchronicle-asset-repo-'));
   const repository = join(base, 'repository');
   const root = join(repository, 'paper', 'draft');
   const figures = join(repository, 'paper', 'figures');
@@ -150,7 +192,7 @@ test('a symlink cannot be a rename destination', async (t) => {
 test('ordinary paths inside the project still work', async () => {
   // The guard must not be so strict that it breaks the product. Two real traps
   // it has to survive: a Windows 8.3 short path (this machine's tmpdir is
-  // C:\Users\ZOELIN~1\...) and a macOS temp dir, which is itself a symlink
+  // C:\Users\APERSON~1\...) and a macOS temp dir, which is itself a symlink
   // (/var -> /private/var). A naive realpath comparison rejects both.
   const { root } = project();
   assert.equal(await readTextFile(root, 'main.tex'), 'inside\n');

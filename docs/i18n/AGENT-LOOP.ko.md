@@ -63,8 +63,8 @@ If there are no accepted comments, do nothing this pass.
    하이라이트, *Suggested* 섹션의 카드):
 
    ```
-   Review my paper using my academic-paper-revision skill
-   (github.com/ZoeLinUTS/Academic-paper-revision). For each issue, call add_comment
+   Review my paper using my installed academic-review skill.
+   For each issue, call add_comment
    with the exact quoted passage and your comment. Don't edit the source yet.
    ```
 
@@ -85,7 +85,7 @@ If there are no accepted comments, do nothing this pass.
 ## Ultra-agents ⚡
 
 > [!CAUTION]
-> MagicTeX에서 가장 강력한 명령이자 감독이 가장 적은 명령입니다 — 설계상 회차마다 당신의 승인을
+> TeXChronicle에서 가장 강력한 명령이자 감독이 가장 적은 명령입니다 — 설계상 회차마다 당신의 승인을
 > 받지 않습니다. 큰 `depth`로 실행하기 전에 이 섹션을 끝까지 읽으세요.
 
 `/ultra-agents [skill] [depth]`는 2단계의 사람 승인 관문을 **완전히 제거합니다** — reviewer가 모든

@@ -1,14 +1,14 @@
-# MagicTeX — Benutzerhandbuch
+# TeXChronicle — Benutzerhandbuch
 
 [English](../USER-GUIDE.md) · [简体中文](USER-GUIDE.zh-CN.md) · [日本語](USER-GUIDE.ja.md) · [한국어](USER-GUIDE.ko.md) · [Español](USER-GUIDE.es.md) · [Français](USER-GUIDE.fr.md) · **Deutsch** · [Português](USER-GUIDE.pt.md)
 
-![Der MagicTeX-Arbeitsbereich](../images/workspace.png)
+![Der TeXChronicle-Arbeitsbereich](../images/workspace.png)
 
 ## Täglicher Einsatz
 
 1. Trage den Server in die `.mcp.json` deines Projekts ein (siehe README) und starte Claude Code neu.
    Oder installiere das Plugin für die Slash-Befehle (unten).
-2. Bitte Claude um *„render a preview“* (oder führe `/magic-latex` aus). Der **Arbeitsbereich**
+2. Bitte Claude um *„render a preview“* (oder führe `/texchronicle` aus). Der **Arbeitsbereich**
    öffnet sich: **Dateibaum + Quellcode-Editor** links, das **Live-PDF** in der Mitte und
    **Comments** rechts (umschaltbar über den 💬 **Comments**-Button in der oberen Leiste).
 3. Ab da bleibt das PDF live. Speichern in deinem eigenen Editor und Claudes Änderungen kompilieren
@@ -17,10 +17,10 @@
 
 ## Slash-Befehle (Plugin)
 
-Einmal installieren — `/plugin marketplace add ZoeLinUTS/MagicTeX-mcp`, dann
-`/plugin install magictex` — und mit minimalem Tippen steuern:
+Einmal installieren — `/plugin marketplace add Aliutin/TeXChronicle`, dann
+`/plugin install texchronicle` — und mit minimalem Tippen steuern:
 
-- **`/magic-latex`** — kompilieren und den Arbeitsbereich öffnen.
+- **`/texchronicle`** — kompilieren und den Arbeitsbereich öffnen.
 - **`/ai-review [skill]`** — das Paper mit einer Skill prüfen (Standard `academic-paper-revision`;
   jeder Skill-Name geht) und Kommentare zum Akzeptieren posten.
 - **`/address-comments`** — deine akzeptierten Kommentare lösen (als Schleife:
@@ -89,7 +89,7 @@ Hervorhebungen werden aus der unsichtbaren *Textebene* von pdf.js gezeichnet (di
 auch fürs Markieren dient) — eine zeilenweise Näherung dafür, wo die Glyphen auf der Canvas gemalt
 werden. Ein Kasten kann also ein Haar daneben liegen, beim Zoomen deutlicher sichtbar. Dieser kleine
 Versatz ist systembedingt und rein kosmetisch. Um die größere Drift zu vermeiden, die früher auftrat,
-nachdem Claude eine Stelle bearbeitet hatte und das PDF neu umbrach, **verankert MagicTeX jede
+nachdem Claude eine Stelle bearbeitet hatte und das PDF neu umbrach, **verankert TeXChronicle jede
 Hervorhebung bei jeder Neukompilierung neu am aktuellen Text** (durch Abgleich der Anfangs- und
 Endphrase des Zitats), statt sie an alten Koordinaten festzunageln — sie folgt dem Text also auch,
 wenn sich die Wörter dazwischen geändert haben. Wird eine Stelle gelöscht oder bis zur
@@ -180,6 +180,6 @@ echten Pakete — die lokale Vorschau ist eine Näherung.
   immer eine finale Kompilierung auf deinem Ziel (Overleaf oder deinem Einreichungssystem).
 - Der Änderungsverlauf liegt auf einer versteckten Git-Ref (`refs/latex-preview/checkpoints`) und
   fasst deine Branches, dein `git log` und deinen Arbeitsbaum nie an. Ist der Ordner kein
-  Git-Repository, hält MagicTeX diese Ref in einem eigenen Repository unter
+  Git-Repository, hält TeXChronicle diese Ref in einem eigenen Repository unter
   `.latex-preview/history.git` im Projekt — der Verlauf wandert, kopiert und verschwindet also
   mit dem Ordner, und `git` meldet dort weiterhin kein Repository.

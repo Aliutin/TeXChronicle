@@ -15,12 +15,13 @@ import { refuseReason, allowWebSocket } from './originGuard.js';
 import { hostPageHtml } from '../engine/hostPage.js';
 import { viewerPageHtml } from './viewerPage.js';
 import { diffViewHtml } from './diffViewPage.js';
-import { canTrackHistory, historyStatus, listCheckpoints, getCheckpointDiff, getWorkingDiff, restoreCheckpoint, restoreFile, latestCheckpointSha, matchingCheckpointSha } from '../git/checkpoints.js';
+import { canTrackHistory, historyStatus, listCheckpoints, getCheckpointDiff, getWorkingDiff, restoreCheckpoint, restoreFile, matchingCheckpointSha } from '../git/checkpoints.js';
 import { listSectionHistory, getSectionDiff, restoreSection } from '../git/sectionHistory.js';
 import { readRenderArtifact } from '../git/renderArtifacts.js';
 import { listTextFiles, readTextFile, writeTextFile, listTree, createTextFile, createDir, renameEntry, deleteEntry, writeUpload, resolveAssetFile, resolveIncludeFile } from './filesApi.js';
 import { suppressNextChange } from '../watch/fileWatcher.js';
 import { listComments, addComment, updateComment, deleteComment, addReply, markCommentsForRestoreReview, type RestoreScope } from './commentsStore.js';
+import { findAnchor } from './anchorMatch.js';
 import { getGitHubRemote } from '../git/remote.js';
 import { buildOverleafZip } from '../export/overleafZip.js';
 import { resolveMainFile } from '../project/resolveMainFile.js';
@@ -35,18 +36,34 @@ async function flagCommentsAfterOlderRestore(
   checkpoint: string,
   scope: RestoreScope,
   label?: string,
+  affectedPath?: string,
 ): Promise<number> {
   const [history, comments] = await Promise.all([listCheckpoints(root), listComments(root)]);
   const position = new Map(history.map((item, index) => [item.sha, index]));
   const restoredAt = position.get(checkpoint);
   if (restoredAt === undefined) return 0;
-  const ids = comments
-    .filter((comment) => {
-      if (comment.status !== 'resolved' || !comment.resolvedCheckpoint) return false;
-      const resolvedAt = position.get(comment.resolvedCheckpoint);
-      return resolvedAt !== undefined && resolvedAt < restoredAt;
-    })
-    .map((comment) => comment.id);
+  const candidates = comments.filter((comment) => {
+    if (comment.status !== 'resolved') return false;
+    // Verification is itself versioned. If the user verified this fix after a
+    // previous restore, compare the next restore with that newer evidence.
+    const anchorCheckpoint = comment.verifiedCheckpoint ?? comment.resolvedCheckpoint;
+    if (!anchorCheckpoint) return false;
+    const resolvedAt = position.get(anchorCheckpoint);
+    return resolvedAt !== undefined && resolvedAt < restoredAt;
+  });
+  const pathKey = (value: string) => {
+    const normalized = value.replace(/\\/g, '/');
+    return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  };
+  const ids: string[] = [];
+  for (const comment of candidates) {
+    if (scope === 'project' || !affectedPath) { ids.push(comment.id); continue; }
+    let sourceFile = comment.sourceFile;
+    if (!sourceFile) sourceFile = (await findAnchor(root, comment.quote))?.file;
+    // Unknown legacy anchors remain conservative; comments created by current
+    // builds carry sourceFile and avoid warning on unrelated partial restores.
+    if (!sourceFile || pathKey(sourceFile) === pathKey(affectedPath)) ids.push(comment.id);
+  }
   return markCommentsForRestoreReview(root, ids, {
     checkpoint,
     scope,
@@ -54,12 +71,48 @@ async function flagCommentsAfterOlderRestore(
     at: new Date().toISOString(),
   });
 }
+
+/** Complete the non-destructive side effects of a successful source restore.
+ * Comment bookkeeping is best effort and compilation is always attempted. A
+ * source mutation must never be reported as a failed/no-op merely because the
+ * independent comments file was unreadable. */
+export async function finishRestore(
+  root: string,
+  checkpoint: string,
+  scope: RestoreScope,
+  label?: string,
+  affectedPath?: string,
+  dependencies: {
+    flag?: typeof flagCommentsAfterOlderRestore;
+    compile?: () => Promise<{ success: boolean; verdict?: { errors: unknown[] } }>;
+  } = {},
+): Promise<{ marked: number; compiled: boolean; warning?: string }> {
+  let marked = 0;
+  let warning: string | undefined;
+  try {
+    marked = await (dependencies.flag ?? flagCommentsAfterOlderRestore)(root, checkpoint, scope, label, affectedPath);
+  } catch (error) {
+    warning = `Source restored, but TeXChronicle could not update comment review warnings: ${String((error as Error).message ?? error)}`;
+    console.warn(`[TeXChronicle] ${warning}`);
+  }
+  try {
+    const result = dependencies.compile
+      ? await dependencies.compile()
+      : await import('../coordinator.js').then(({ requestCompile }) => requestCompile());
+    const compiled = result.success && (!result.verdict || result.verdict.errors.length === 0);
+    return { marked, compiled, ...(warning ? { warning } : {}) };
+  } catch (error) {
+    const compileWarning = `Source restored, but recompilation did not complete: ${String((error as Error).message ?? error)}`;
+    console.warn(`[TeXChronicle] ${compileWarning}`);
+    return { marked, compiled: false, warning: warning ? `${warning} ${compileWarning}` : compileWarning };
+  }
+}
 import { inverseSyncTeX } from './synctex.js';
 
 const PKG_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 
 // Locate a dependency's install directory via Node's OWN resolver rather than
-// assuming `<pkg-root>/node_modules/<dep>`. When MagicTeX is installed from npm,
+// assuming `<pkg-root>/node_modules/<dep>`. When TeXChronicle is installed from npm,
 // npm hoists dependencies to the CONSUMER's top-level node_modules, so that
 // assumed path doesn't exist and every asset below 404s — which silently breaks
 // the compile engine, since the engine only loads on the first render_preview.
@@ -107,18 +160,18 @@ const ISOLATION_HEADERS = {
  *
  * **The root was never normalised.** `join`/`normalize` return the platform
  * separator, so on Windows `filePath` came back with backslashes while `root`
- * stayed exactly as the caller had it. For `MAGICTEX_ASSETS_DIR` that is a path
+ * stayed exactly as the caller had it. For `TEXCHRONICLE_ASSETS_DIR` that is a path
  * a human typed — usually into a JSON config, where a backslash has to be
  * doubled and a forward slash does not:
  *
- *   root     C:/Users/Zoe Lin/…/assets/busytex
- *   filePath C:\Users\Zoe Lin\…\assets\busytex\busytex.wasm     -> 403
+ *   root     C:/Users/A Person/…/assets/busytex
+ *   filePath C:\Users\A Person\…\assets\busytex\busytex.wasm     -> 403
  *
  * Every engine asset 403'd, and what the user saw was "BusyTeX worker failed to
  * initialize", with nothing pointing at the setting they had just added.
  *
- * **A prefix match is not containment.** `C:\Users\zoe\project-elsewhere\x.tex`
- * starts with `C:\Users\zoe\proj`. Not reachable today, since serveFrom is only
+ * **A prefix match is not containment.** `C:\Users\ada\project-elsewhere\x.tex`
+ * starts with `C:\Users\ada\proj`. Not reachable today, since serveFrom is only
  * ever handed our own directories — but it is the same line, and `filesApi`'s
  * guard has carried both halves since the server was hardened.
  */
@@ -149,9 +202,11 @@ export interface PreviewServerHandle {
   viewerUrl: string;
   /** Replace the current PDF and notify viewers to re-render. `name` is the
    *  source main-file (e.g. "main.tex") used for the download filename. */
-  setLatestPdf: (pdf: Uint8Array, name?: string, syncTex?: Uint8Array) => Promise<void>;
+  setLatestPdf: (pdf: Uint8Array, name?: string, syncTex?: Uint8Array, checkpoint?: string) => Promise<void>;
   /** Tell viewers a compile is running / failed, or that comments changed. */
   broadcast: (msg: { type: 'compiling' } | { type: 'compile-error'; log: string } | { type: 'comments-changed' }) => void;
+  /** Source/PDF identity used by comment resolution gates. */
+  renderState: () => { status: 'idle' | 'compiling' | 'ok' | 'error'; checkpoint?: string };
   /** Say goodbye to open tabs, drop every socket, and stop listening. */
   close: () => Promise<void>;
 }
@@ -159,6 +214,8 @@ export interface PreviewServerHandle {
 export function startPreviewServer(): Promise<PreviewServerHandle> {
   let latestPdf: Buffer | null = null;
   let latestName: string | undefined;
+  let latestPdfCheckpoint: string | undefined;
+  let compileState: 'idle' | 'compiling' | 'ok' | 'error' = 'idle';
   // The published PDF and map are kept as a matched pair. Two alternating slots
   // let the next compile finish writing off to the side before queries switch to
   // it, so a click can never observe half of one render and half of another.
@@ -187,7 +244,7 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
     const refuse = refuseReason(req, boundPort);
     if (refuse) {
       res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8', ...ISOLATION_HEADERS });
-      res.end(`MagicTeX refused this request: ${refuse}
+      res.end(`TeXChronicle refused this request: ${refuse}
 `);
       return;
     }
@@ -228,11 +285,9 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
       try {
         const root = getProjectRoot();
         const restored = await restoreSection(root, section, sha);
-        const marked = await flagCommentsAfterOlderRestore(root, sha, 'section', section);
-        if (marked) send({ type: 'comments-changed' });
-        const { requestCompile } = await import('../coordinator.js');
-        requestCompile().catch(() => {});
-        return json(res, { ok: true, ...restored });
+        const completed = await finishRestore(root, sha, 'section', restored.title, restored.path);
+        if (completed.marked) send({ type: 'comments-changed' });
+        return json(res, { ok: true, ...restored, ...completed });
       } catch (e) {
         res.writeHead(400, ISOLATION_HEADERS).end(String((e as Error).message)); return;
       }
@@ -257,11 +312,9 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
       try {
         const root = getProjectRoot();
         await restoreCheckpoint(root, sha);
-        const marked = await flagCommentsAfterOlderRestore(root, sha, 'project');
-        if (marked) send({ type: 'comments-changed' });
-        const { requestCompile } = await import('../coordinator.js');
-        requestCompile().catch(() => {});
-        return json(res, { ok: true });
+        const completed = await finishRestore(root, sha, 'project');
+        if (completed.marked) send({ type: 'comments-changed' });
+        return json(res, { ok: true, ...completed });
       } catch (e) {
         res.writeHead(400, ISOLATION_HEADERS).end(String((e as Error).message)); return;
       }
@@ -273,11 +326,9 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
       try {
         const root = getProjectRoot();
         await restoreFile(root, sha, path);
-        const marked = await flagCommentsAfterOlderRestore(root, sha, 'file', path);
-        if (marked) send({ type: 'comments-changed' });
-        const { requestCompile } = await import('../coordinator.js');
-        requestCompile().catch(() => {});
-        return json(res, { ok: true });
+        const completed = await finishRestore(root, sha, 'file', path, path);
+        if (completed.marked) send({ type: 'comments-changed' });
+        return json(res, { ok: true, ...completed });
       } catch (e) {
         res.writeHead(400, ISOLATION_HEADERS).end(String((e as Error).message)); return;
       }
@@ -292,9 +343,13 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
           const chunks: Buffer[] = [];
           for await (const c of req) chunks.push(c as Buffer);
           const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          const anchor = await findAnchor(root, String(input.quote ?? '')).catch(() => null);
           const created = await addComment(root, {
             ...input,
-            createdCheckpoint: await latestCheckpointSha(root),
+            // A browser comment belongs to the PDF the person selected, not a
+            // newer history tip that may already exist behind a stale pane.
+            createdCheckpoint: latestPdfCheckpoint,
+            ...(anchor ? { sourceFile: anchor.file, sourceLine: anchor.line } : {}),
           });
           send({ type: 'comments-changed' });
           return json(res, created);
@@ -305,15 +360,25 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
           for await (const c of req) chunks.push(c as Buffer);
           const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
           // Checkpoint ids are server-derived, never accepted from browser JSON.
-          const patch = {
+          const patch: Parameters<typeof updateComment>[2] = {
             ...(input.status !== undefined ? { status: input.status } : {}),
             ...(input.text !== undefined ? { text: input.text } : {}),
             ...(input.resolvedNote !== undefined ? { resolvedNote: input.resolvedNote } : {}),
-            ...(input.restoreReview === null ? { restoreReview: null } : {}),
           };
-          if (input.status === 'resolved') {
+          if (input.status === 'resolved' || input.restoreReview === null) {
             const current = await matchingCheckpointSha(root);
-            if (current.sha) Object.assign(patch, { resolvedCheckpoint: current.sha });
+            if (!current.sha || current.dirty || compileState !== 'ok' || latestPdfCheckpoint !== current.sha) {
+              res.writeHead(409, ISOLATION_HEADERS).end(
+                'The current source is not the clean checkpoint shown in the PDF. Wait for a successful recompile before resolving or verifying this comment.',
+              );
+              return;
+            }
+            if (input.status === 'resolved') patch.resolvedCheckpoint = current.sha;
+            if (input.restoreReview === null) Object.assign(patch, {
+              restoreReview: null,
+              verifiedCheckpoint: current.sha,
+              verifiedAt: new Date().toISOString(),
+            });
           }
           const updated = await updateComment(root, id, patch);
           if (!updated) { res.writeHead(404, ISOLATION_HEADERS).end('unknown comment'); return; }
@@ -570,7 +635,7 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
     ws.on('close', () => clients.delete(ws));
     // A viewer that connects after a compile already ran still needs the current
     // PDF and its name (for the download filename) — push it immediately.
-    if (latestPdf) { try { ws.send(JSON.stringify({ type: 'reload', name: latestName })); } catch { /* dropped */ } }
+    if (latestPdf) { try { ws.send(JSON.stringify({ type: 'reload', name: latestName, checkpoint: latestPdfCheckpoint })); } catch { /* dropped */ } }
   });
 
   return new Promise((resolve) => {
@@ -581,9 +646,11 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
       const url = `http://127.0.0.1:${port}`;
       resolve({
         server, port, url, viewerUrl: `${url}/viewer`,
-        setLatestPdf: async (pdf, name, syncTex) => {
+        setLatestPdf: async (pdf, name, syncTex, checkpoint) => {
           latestPdf = Buffer.from(pdf);
           latestName = name;
+          latestPdfCheckpoint = checkpoint;
+          compileState = 'ok';
           latestSyncPdf = null;
           if (name && syncTex?.length) {
             try {
@@ -601,12 +668,17 @@ export function startPreviewServer(): Promise<PreviewServerHandle> {
               latestSyncPdf = pdfPath;
             } catch (error) {
               // Mapping is an enhancement, never a reason to hide a good PDF.
-              console.warn('[MagicTeX] could not publish SyncTeX data; using text matching', error);
+              console.warn('[TeXChronicle] could not publish SyncTeX data; using text matching', error);
             }
           }
-          send({ type: 'reload', name });
+          send({ type: 'reload', name, checkpoint });
         },
-        broadcast: (msg) => send(msg),
+        broadcast: (msg) => {
+          if (msg.type === 'compiling') compileState = 'compiling';
+          else if (msg.type === 'compile-error') compileState = 'error';
+          send(msg);
+        },
+        renderState: () => ({ status: compileState, ...(latestPdfCheckpoint ? { checkpoint: latestPdfCheckpoint } : {}) }),
         close: () => new Promise<void>((done) => {
           // Measured, on the version this replaces: with one WebSocket peer that
           // never answered a close frame, close() took 30 015 ms — the ws

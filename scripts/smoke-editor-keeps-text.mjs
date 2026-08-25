@@ -57,7 +57,7 @@ const check = (name, ok, detail = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${!ok && detail ? `\n      ${detail}` : ''}`);
 };
 
-const proj = mkdtempSync(join(tmpdir(), 'magictex-editor-'));
+const proj = mkdtempSync(join(tmpdir(), 'texchronicle-editor-'));
 mkdirSync(join(proj, 'sections'));
 writeFileSync(join(proj, 'main.tex'), [
   String.raw`\documentclass{article}`,

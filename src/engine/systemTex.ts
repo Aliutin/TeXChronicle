@@ -3,8 +3,9 @@
 // backend 'auto' when a local TeX is present; 'system' forces it, 'wasm' opts
 // out and keeps the zero-install path.
 import { execFile, execFileSync, spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { promisify } from 'node:util';
-import { access, readFile, mkdir } from 'node:fs/promises';
+import { access, readFile, mkdir, rm } from 'node:fs/promises';
 import { basename, delimiter, dirname, join } from 'node:path';
 import type { CompileOutput } from './browserHost.js';
 import type { Engine } from '../project/compileProject.js';
@@ -133,7 +134,7 @@ export const INSTALL_TEX_HELP = [
   'does not ship one. Check with `latexmk -version`, not `which latexmk`: the',
   'file is on PATH either way, and only one of those tells you it can run.',
   '',
-  "You don't need one to use MagicTeX: the bundled WASM engine compiles with no",
+  "You don't need one to use TeXChronicle: the bundled WASM engine compiles with no",
   'install at all. But it is a subset of TeX Live, so packages like `svg` and most',
   "venue classes aren't in it. Install a distribution when you need output that",
   'matches Overleaf exactly.',
@@ -191,7 +192,7 @@ export function systemFallbackNote(f: SystemFallback): string {
 /**
  * Why the local TeX could not be used. `'absent'` and `'broken'` are different
  * problems with opposite answers, and collapsing them cost a real afternoon: a
- * user installed MiKTeX, MagicTeX went on saying no local TeX was found, and an
+ * user installed MiKTeX, TeXChronicle went on saying no local TeX was found, and an
  * agent eventually gave up and invoked the compiler itself.
  */
 export interface SystemTexProbe {
@@ -310,7 +311,7 @@ export function systemTexAdvice(
   if (p?.reason === 'broken') {
     const perl = /script engine|perl/i.test(p.detail ?? '');
     return [
-      'A local TeX would have this package, and MagicTeX uses one automatically when it can.',
+      'A local TeX would have this package, and TeXChronicle uses one automatically when it can.',
       '`latexmk` is on PATH here but could not run:',
       ...(p.detail ? ['', p.detail.split('\n').map((l) => `  ${l}`).join('\n')] : []),
       '',
@@ -318,10 +319,10 @@ export function systemTexAdvice(
         ? ['latexmk is a Perl script and MiKTeX ships no Perl interpreter. Install Strawberry',
            'Perl (https://strawberryperl.com/), or TeX Live for Windows (https://tug.org/texlive/),',
            'which bundles one.']
-        : ['Fix that and MagicTeX will pick it up without any further configuration.']),
+        : ['Fix that and TeXChronicle will pick it up without any further configuration.']),
     ].join('\n');
   }
-  return `A local TeX install would have this package, and MagicTeX picks one up automatically once there is one.\n\n${INSTALL_TEX_HELP}`;
+  return `A local TeX install would have this package, and TeXChronicle picks one up automatically once there is one.\n\n${INSTALL_TEX_HELP}`;
 }
 
 /**
@@ -425,12 +426,33 @@ export function killTree(pid: number): void {
   try { process.kill(-pid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
 }
 
+// Every system compile is a process tree (latexmk → TeX → bibliography/tools).
+// Keep ownership centrally so application shutdown can stop it immediately,
+// rather than hoping a hidden child exits when the launcher window closes.
+const activeLatexmk = new Set<number>();
+const ownedBuildDirs = new Set<string>();
+const buildSession = randomBytes(4).toString('hex');
+
+export async function stopSystemTex(): Promise<void> {
+  for (const pid of activeLatexmk) killTree(pid);
+  activeLatexmk.clear();
+  const dirs = [...ownedBuildDirs];
+  ownedBuildDirs.clear();
+  await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true }).catch(() => {})));
+}
+
+export function systemBuildDir(root: string, pid = process.pid): string {
+  return join(root, '.latex-preview', 'build', `${pid}-${buildSession}`);
+}
+
 /** Compile `mainRelPath` (relative to `root`) with local latexmk; artifacts go
- *  under .latex-preview/build so the project tree stays clean. */
+ *  under a process-private .latex-preview/build directory so two independent
+ *  TeXChronicle/MCP processes cannot race on the same aux/PDF/SyncTeX files. */
 export async function compileWithSystemTex(root: string, mainRelPath: string, engine: Engine, shellEscape = false): Promise<CompileOutput> {
   const started = Date.now();
-  const outdir = join(root, '.latex-preview', 'build');
+  const outdir = systemBuildDir(root);
   await mkdir(outdir, { recursive: true });
+  ownedBuildDirs.add(outdir);
   const stem = basename(mainRelPath).replace(/\.tex$/i, '');
   const pdfPath = join(outdir, stem + '.pdf');
   const syncPath = join(outdir, stem + '.synctex.gz');
@@ -453,7 +475,7 @@ export async function compileWithSystemTex(root: string, mainRelPath: string, en
     const retry = await runLatexmk(root, retryArgs);
     code = retry.code;
     stopped = retry.stopped;
-    out += `\n\n[MagicTeX: latexmk retained an earlier failed rule; forced one clean dependency rebuild.]\n${retry.out}`;
+    out += `\n\n[TeXChronicle: latexmk retained an earlier failed rule; forced one clean dependency rebuild.]\n${retry.out}`;
   }
 
   if (stopped) {
@@ -497,6 +519,7 @@ function runLatexmk(cwd: string, args: string[]): Promise<{ code: number | null;
       detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    if (child.pid) activeLatexmk.add(child.pid);
 
     let out = '';
     let stopped: 'idle' | 'cap' | undefined;
@@ -523,10 +546,12 @@ function runLatexmk(cwd: string, args: string[]): Promise<{ code: number | null;
 
     child.on('error', (e) => {
       clearTimeout(idle); clearTimeout(cap);
+      if (child.pid) activeLatexmk.delete(child.pid);
       resolve({ code: 1, out: out + String(e.message) });
     });
     child.on('close', (code) => {
       clearTimeout(idle); clearTimeout(cap);
+      if (child.pid) activeLatexmk.delete(child.pid);
       resolve({ code, out, stopped });
     });
   });

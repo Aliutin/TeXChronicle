@@ -9,6 +9,7 @@ import {
   previewTextChange,
   resolveLatexInclude,
   type InlineNode,
+  type PreviewBlock,
 } from '../ui/src/latexPreview.js';
 
 function textLeaves(nodes: InlineNode[]): Array<Extract<InlineNode, { type: 'text' }>> {
@@ -16,6 +17,14 @@ function textLeaves(nodes: InlineNode[]): Array<Extract<InlineNode, { type: 'tex
     if (node.type === 'text') return [node];
     if ('children' in node) return textLeaves(node.children);
     return [];
+  });
+}
+
+function nestedBlocks(blocks: PreviewBlock[]): PreviewBlock[] {
+  return blocks.flatMap((block): PreviewBlock[] => {
+    if (block.type === 'frame' || block.type === 'callout') return [block, ...nestedBlocks(block.blocks)];
+    if (block.type === 'columns') return [block, ...block.columns.flatMap(nestedBlocks)];
+    return [block];
   });
 }
 
@@ -84,6 +93,79 @@ A & 1 \\
   assert.equal(previewPlainText(table.rows[0].cells[0].content), 'Name');
   assert.equal(document.footnotes.length, 1);
   assert.equal(previewPlainText(document.footnotes[0].content), 'A useful note.');
+});
+
+test('Beamer live preview keeps editable frames, columns, overlays, callouts, and slide artwork', () => {
+  const source = String.raw`\documentclass[aspectratio=169]{beamer}
+\title{A Live Deck}
+\author{Ada Presenter}
+\begin{document}
+\begin{frame}[plain]
+\titlepage
+\end{frame}
+
+\section{Main idea}
+\begin{frame}<1->[fragile]{A \alert{Live} Frame}{Editable subtitle}
+Original slide prose.
+
+\pause
+\begin{columns}[T,onlytextwidth]
+  \begin{column}{.48\textwidth}
+    \begin{alertblock}{Important result}
+      Callout prose stays editable.
+    \end{alertblock}
+    \begin{itemize}[<+->]
+      \item<2-> First revealed point
+      \item<3-> Second revealed point
+    \end{itemize}
+  \end{column}
+  \begin{column}{.48\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{result-chart.pdf}
+  \end{column}
+\end{columns}
+\end{frame}
+\end{document}`;
+
+  const document = parseLatexPreview(source);
+  assert.equal(document.kind, 'presentation');
+  assert.equal(document.aspectRatio, '16:9');
+  const frames = document.blocks.filter((block) => block.type === 'frame');
+  assert.equal(frames.length, 2);
+
+  const titleFrame = frames[0];
+  assert.ok(titleFrame?.type === 'frame');
+  const title = titleFrame.blocks.find((block) => block.type === 'title');
+  assert.ok(title?.type === 'title');
+  assert.equal(previewPlainText(title.title), 'A Live Deck');
+
+  const contentFrame = frames[1];
+  assert.ok(contentFrame?.type === 'frame');
+  assert.equal(previewPlainText(contentFrame.title), 'A Live Frame');
+  assert.equal(previewPlainText(contentFrame.subtitle), 'Editable subtitle');
+  assert.equal(contentFrame.overlays, true);
+
+  const all = nestedBlocks(contentFrame.blocks);
+  const columns = all.find((block) => block.type === 'columns');
+  assert.ok(columns?.type === 'columns');
+  assert.equal(columns.columns.length, 2);
+  const callout = all.find((block) => block.type === 'callout');
+  assert.ok(callout?.type === 'callout');
+  assert.equal(previewPlainText(callout.title), 'Important result');
+  assert.equal(callout.tone, 'accent');
+  const list = all.find((block) => block.type === 'list');
+  assert.ok(list?.type === 'list');
+  assert.deepEqual(list.items.map((item) => previewPlainText(item.content)), ['First revealed point', 'Second revealed point']);
+  const image = all.find((block) => block.type === 'image');
+  assert.ok(image?.type === 'image');
+  assert.deepEqual(image.assets, ['result-chart.pdf']);
+
+  const paragraph = all.find((block) => block.type === 'paragraph' && previewPlainText(block.content).includes('Original slide prose'));
+  assert.ok(paragraph?.type === 'paragraph');
+  const editable = textLeaves(paragraph.content).find((leaf) => leaf.text.includes('Original slide prose'));
+  assert.ok(editable?.source);
+  assert.equal(source.slice(editable.source.from, editable.source.to), 'Original slide prose.');
+  assert.doesNotMatch(all.map((block) => block.type === 'paragraph' ? previewPlainText(block.content) : '').join(' '), /<\d/);
 });
 
 test('comments disappear without changing source-line locations', () => {

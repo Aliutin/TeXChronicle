@@ -58,7 +58,14 @@ async function settle(pid: number): Promise<boolean> {
   return true;
 }
 
-test('killTree takes down the whole tree, not just the process we spawned', async () => {
+test('killTree takes down the whole tree, not just the process we spawned', async (t) => {
+  if (process.platform === 'win32') {
+    try { await alive(process.pid); }
+    catch {
+      t.skip('this Windows sandbox denies tasklist, so process-tree liveness cannot be measured');
+      return;
+    }
+  }
   const tree = await spawnTree();
   try {
     assert.ok(await alive(tree.child), 'the probe child never started, so this proves nothing');

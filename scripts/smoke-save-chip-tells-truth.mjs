@@ -48,7 +48,7 @@ const check = (name, ok, detail = '') => {
 // enough to the old two-second timer that the probe below would be racing the
 // real compile instead of measuring it — the first version of this test failed
 // for exactly that reason. A .bib plus a \cite forces bibtex and a rerun.
-const proj = mkdtempSync(join(tmpdir(), 'magictex-chip-'));
+const proj = mkdtempSync(join(tmpdir(), 'texchronicle-chip-'));
 writeFileSync(join(proj, 'refs.bib'), '@article{k, title={T}, author={A}, journal={J}, year={2020}}\n');
 const GOOD = [
   String.raw`\documentclass{article}`,

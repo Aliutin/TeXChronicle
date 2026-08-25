@@ -12,7 +12,6 @@ import {
   type ReactNode,
 } from 'react';
 import katex from 'katex';
-import 'katex/dist/katex.min.css';
 import {
   contentEditableParagraphDraft,
   expandLatexIncludes,
@@ -51,9 +50,16 @@ const EditingContext = createContext<EditingContextValue | null>(null);
 
 function mapLocations(document: PreviewDocument, locations: PreviewSourceLocation[], fallbackFile: string): PreviewDocument {
   const at = (line: number): PreviewSourceLocation => locations[Math.max(0, line - 1)] ?? { file: fallbackFile, line };
+  const mapBlock = (block: PreviewBlock): PreviewBlock => {
+    const located = { ...block, ...at(block.line) };
+    if (block.type === 'frame') return { ...located, blocks: block.blocks.map(mapBlock) } as PreviewBlock;
+    if (block.type === 'columns') return { ...located, columns: block.columns.map((column) => column.map(mapBlock)) } as PreviewBlock;
+    if (block.type === 'callout') return { ...located, blocks: block.blocks.map(mapBlock) } as PreviewBlock;
+    return located as PreviewBlock;
+  };
   return {
     ...document,
-    blocks: document.blocks.map((block) => ({ ...block, ...at(block.line) })),
+    blocks: document.blocks.map(mapBlock),
     footnotes: document.footnotes.map((footnote) => ({ ...footnote, line: at(footnote.line).line })),
   };
 }
@@ -302,6 +308,63 @@ function BlockView({ block, document, sourceFile, refreshKey, onEdit, onOpenAsse
   onEdit: (line?: number, file?: string) => void;
   onOpenAsset: (selection: AssetSelection) => void;
 }) {
+  const renderChild = (child: PreviewBlock, index: number) => (
+    <BlockView
+      key={`${child.type}-${child.file ?? sourceFile}-${child.line}-${index}`}
+      block={child}
+      document={document}
+      sourceFile={sourceFile}
+      refreshKey={refreshKey}
+      onEdit={onEdit}
+      onOpenAsset={onOpenAsset}
+    />
+  );
+
+  if (block.type === 'frame') {
+    return (
+      <Located block={block} sourceFile={sourceFile} onEdit={onEdit} className={`live-frame ${block.plain ? 'live-frame-plain' : ''}`}>
+        <div className="live-frame-meta">
+          <span>FRAME {block.number}</span>
+          {block.overlays && <span className="live-overlay-badge" title="Live combines every Beamer overlay; the PDF shows their exact sequence">ALL OVERLAYS</span>}
+        </div>
+        <div className="live-frame-canvas">
+          {(block.title.length > 0 || block.subtitle.length > 0) && (
+            <header className="live-frame-heading">
+              {block.title.length > 0 && <h2><InlineView nodes={block.title} document={document} /></h2>}
+              {block.subtitle.length > 0 && <p><InlineView nodes={block.subtitle} document={document} /></p>}
+            </header>
+          )}
+          <div className="live-frame-content">
+            {block.blocks.length > 0
+              ? block.blocks.map(renderChild)
+              : <div className="live-frame-empty">This frame has no simplified content. Its exact result remains visible in PDF.</div>}
+          </div>
+        </div>
+      </Located>
+    );
+  }
+
+  if (block.type === 'columns') {
+    return (
+      <Located block={block} sourceFile={sourceFile} onEdit={onEdit} className="live-columns">
+        <div className="live-columns-grid" style={{ gridTemplateColumns: `repeat(${Math.max(1, block.columns.length)}, minmax(0, 1fr))` }}>
+          {block.columns.map((column, columnIndex) => (
+            <div className="live-column" key={columnIndex}>{column.map(renderChild)}</div>
+          ))}
+        </div>
+      </Located>
+    );
+  }
+
+  if (block.type === 'callout') {
+    return (
+      <Located block={block} sourceFile={sourceFile} onEdit={onEdit} className={`live-callout live-callout-${block.tone}`}>
+        {block.title.length > 0 && <div className="live-callout-title"><InlineView nodes={block.title} document={document} /></div>}
+        <div className="live-callout-content">{block.blocks.map(renderChild)}</div>
+      </Located>
+    );
+  }
+
   if (block.type === 'title') {
     return (
       <Located block={block} sourceFile={sourceFile} onEdit={onEdit} className="live-title-block">
@@ -357,6 +420,22 @@ function BlockView({ block, document, sourceFile, refreshKey, onEdit, onOpenAsse
           </div>
           <figcaption><strong>Figure {block.number}.</strong>{' '}<InlineView nodes={block.caption} document={document} /></figcaption>
         </figure>
+      </Located>
+    );
+  }
+  if (block.type === 'image') {
+    return (
+      <Located block={block} sourceFile={sourceFile} onEdit={onEdit} className="live-slide-image">
+        <div className="live-figure-assets">
+          {block.assets.map((asset) => (
+            <LiveFigureAsset
+              key={asset}
+              selection={{ path: asset, from: block.file ?? sourceFile }}
+              refreshKey={refreshKey}
+              onOpen={onOpenAsset}
+            />
+          ))}
+        </div>
       </Located>
     );
   }
@@ -418,7 +497,8 @@ export function LivePreview({ source, file, refreshKey = 0, onEdit, onTextEdit, 
   const starts = useMemo(() => sourceLineStarts(expanded.text), [expanded.text]);
   const document = useMemo<PreviewDocument>(() => renderable
     ? mapLocations(parseLatexPreview(expanded.text), expanded.locations, file)
-    : { blocks: [], footnotes: [], references: {}, approximated: [], wordCount: 0 }, [expanded, file, renderable]);
+    : { kind: 'article', aspectRatio: '4:3', blocks: [], footnotes: [], references: {}, approximated: [], wordCount: 0 }, [expanded, file, renderable]);
+  const frameCount = document.blocks.filter((block) => block.type === 'frame').length;
   const editing = useMemo<EditingContextValue>(() => ({
     canEdit: (textSource) => sourceRangeEditable(textSource, expanded, starts),
     resolve: (change) => resolveSourceEdit(change, expanded, starts, file),
@@ -433,9 +513,9 @@ export function LivePreview({ source, file, refreshKey = 0, onEdit, onTextEdit, 
   return (
     <div className="live-preview">
       <div className="live-preview-status">
-        <span className="live-badge"><span className="live-dot" />LIVE EDITOR</span>
+        <span className="live-badge"><span className="live-dot" />{document.kind === 'presentation' ? 'LIVE SLIDES' : 'LIVE EDITOR'}</span>
         <span>{document.wordCount.toLocaleString()} words</span>
-        <span>{document.blocks.length} blocks</span>
+        <span>{document.kind === 'presentation' ? `${frameCount} frame${frameCount === 1 ? '' : 's'}` : `${document.blocks.length} blocks`}</span>
         {document.approximated.length > 0 && (
           <span className="live-approx" title={`Approximated: ${document.approximated.join(', ')}`}>
             {document.approximated.length} construct{document.approximated.length === 1 ? '' : 's'} approximated
@@ -443,11 +523,11 @@ export function LivePreview({ source, file, refreshKey = 0, onEdit, onTextEdit, 
         )}
         {editProblem && <span className="live-edit-problem" title={editProblem}>edit refreshed — retry</span>}
         <span className="spacer" />
-        <span className="live-exact-note">Click prose to edit · protected items keep exact LaTeX · PDF is exact</span>
+        <span className="live-exact-note">{document.kind === 'presentation' ? 'All overlays combined · click prose to edit · PDF is exact' : 'Click prose to edit · protected items keep exact LaTeX · PDF is exact'}</span>
       </div>
       <div className="live-preview-scroll">
         <EditingContext.Provider value={editing}>
-          <article className="live-paper" aria-label={`Live visual editor for ${file}`}>
+          <article className={`live-paper ${document.kind === 'presentation' ? `live-deck live-deck-${document.aspectRatio.replace(':', '-')}` : ''}`} aria-label={`Live visual editor for ${file}`}>
             {!renderable ? (
               <div className="live-empty"><h2>Live editing is for .tex files</h2><p>Use Edit Code for bibliography, style, configuration, Markdown, and text files.</p></div>
             ) : document.blocks.length > 0

@@ -1,6 +1,6 @@
 version: 2
 
-# Throttled on purpose. MagicTeX has ~24 direct dependencies and one
+# Throttled on purpose. TeXChronicle has ~24 direct dependencies and one
 # maintainer; ungrouped daily updates would mean a steady stream of PRs, which
 # in practice means they all get ignored. The aim is a small number of PRs that
 # actually get reviewed.

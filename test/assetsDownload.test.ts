@@ -6,9 +6,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { downloadCommand } from '../src/engine/assets.js';
 
-// The 480 MB first-run download is the very first thing MagicTeX does on a new
+// The 480 MB first-run download is the very first thing TeXChronicle does on a new
 // machine, and on Windows it was launched through a shell with the destination
-// path unquoted. `%LOCALAPPDATA%\magictex` contains a space for every user whose
+// path unquoted. A per-user cache path contains a space for every user whose
 // account name does — which is most people who use their real name — so the
 // download went to the wrong place, or nowhere.
 
@@ -22,7 +22,7 @@ function argvEcho(): { dir: string; script: string } {
   return { dir, script };
 }
 
-const DEST_WITH_SPACE = join(tmpdir(), 'Zoe Lin', 'AppData', 'Local', 'magictex');
+const DEST_WITH_SPACE = join(tmpdir(), 'A User', 'AppData', 'Local', 'texchronicle');
 
 test('the downloader is launched without a shell, so a path with a space stays one argument', () => {
   const plan = downloadCommand(DEST_WITH_SPACE);
@@ -73,8 +73,8 @@ test('the old shell launch tears the path in half — the same call, one option 
     assert.ok(received.length > 2,
       `expected the shell to split the destination; it returned ${JSON.stringify(received)}`);
     // Measured on Windows:
-    //   ["download-assets", "C:\\Users\\...\\Zoe", "Lin\\AppData\\Local\\magictex"]
-    // The download went to `C:\Users\...\Zoe`.
+    //   ["download-assets", "C:\\Users\\...\\A", "User\\AppData\\Local\\texchronicle"]
+    // The download went to `C:\Users\...\A`.
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -32,9 +32,10 @@
 // collector and the export zip, and already excluded from checkpoints
 // themselves.
 import { createHash } from 'node:crypto';
-import { mkdir, access, rename, cp, rm, readFile, writeFile, realpath } from 'node:fs/promises';
+import { mkdir, access, rename, cp, rm, readFile, writeFile, realpath, stat } from 'node:fs/promises';
 import { join, dirname, extname, resolve } from 'node:path';
-import { cacheRoot } from '../engine/assetsDir.js';
+import { legacyCacheRoot } from '../engine/assetsDir.js';
+import { withHistoryInitLock } from '../lock.js';
 import { git, gitOrNull } from './exec.js';
 
 export type HistoryMode =
@@ -61,14 +62,14 @@ export interface HistoryRepo {
 
 const NO_GIT: HistoryRepo = { mode: 'no-git', env: {} };
 
-/** Identity for commits we create. A shadow repo has no user config to inherit,
+/** Identity for checkpoints we create. A shadow repo has no user config to inherit,
  *  and `commit-tree` fails outright without one — which would have turned "no
  *  git identity configured" into "history silently never appears". */
 const IDENTITY = {
-  GIT_AUTHOR_NAME: 'MagicTeX',
-  GIT_AUTHOR_EMAIL: 'magictex@localhost',
-  GIT_COMMITTER_NAME: 'MagicTeX',
-  GIT_COMMITTER_EMAIL: 'magictex@localhost',
+  GIT_AUTHOR_NAME: 'TeXChronicle',
+  GIT_AUTHOR_EMAIL: 'texchronicle@localhost',
+  GIT_COMMITTER_NAME: 'TeXChronicle',
+  GIT_COMMITTER_EMAIL: 'texchronicle@localhost',
 };
 
 const TOOL_DIR = '.latex-preview';
@@ -88,7 +89,7 @@ const exists = async (p: string): Promise<boolean> => {
 
 /** Compare work-tree roots through real paths. A TeX project may sit inside a
  * much larger Git repository; that does not make the whole repository this
- * MagicTeX project. On Windows the same directory can differ only by case. */
+ * TeXChronicle project. On Windows the same directory can differ only by case. */
 async function sameDirectory(a: string, b: string): Promise<boolean> {
   const canonical = async (path: string): Promise<string> => {
     const real = await realpath(path).catch(() => resolve(path));
@@ -119,7 +120,7 @@ async function ignoreToolStorage(root: string): Promise<void> {
     lines.add(`${SHADOW}/`);
     // Exact render PDFs are synchronised with the project, but are binary build
     // artifacts rather than source. Keep them out of both the user's ordinary
-    // Git repository and MagicTeX's hidden checkpoint trees.
+    // Git repository and TeXChronicle's hidden checkpoint trees.
     lines.add('renders/');
     const next = [...lines].join('\n') + '\n';
     if (next !== existing) await writeFile(path, next, 'utf8');
@@ -138,7 +139,7 @@ async function legacyCacheDir(root: string): Promise<string> {
   try { key = await realpath(root); } catch { /* not yet created; the raw path will do */ }
   if (process.platform === 'win32') key = key.toLowerCase();
   const hash = createHash('sha256').update(key).digest('hex').slice(0, 16);
-  return join(cacheRoot(), 'history', hash);
+  return join(legacyCacheRoot(), 'history', hash);
 }
 
 /** Files whose bytes we are willing to compare as text. Deliberately not
@@ -209,22 +210,99 @@ async function adoptLegacyCache(root: string, dest: string): Promise<void> {
 // ────────────────────────────────────────────────────────────────────────────
 
 const cache = new Map<string, HistoryRepo>();
+const initializing = new Map<string, Promise<HistoryRepo>>();
+
+function projectKey(root: string): string {
+  const key = resolve(root).replace(/[\\/]+$/, '');
+  return process.platform === 'win32' ? key.toLowerCase() : key;
+}
+
+const delay = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
+
+/** A crashed `git init` can leave this one lock behind. It is internal to a
+ * not-yet-valid shadow repository, so an old lock cannot protect user Git work.
+ * Fresh locks are never touched: another process may still be finishing. */
+async function clearStaleInitConfigLock(dir: string): Promise<void> {
+  const path = join(dir, 'config.lock');
+  try {
+    if (Date.now() - (await stat(path)).mtimeMs > 30_000) {
+      await rm(path, { force: true });
+    }
+  } catch {
+    // Missing already, or unreadable; let git provide the useful error below.
+  }
+}
+
+async function usableShadowRepo(root: string, dir: string, env: NodeJS.ProcessEnv): Promise<boolean> {
+  if (!(await isRepo(dir))) return false;
+  return (await gitOrNull(root, ['rev-parse', '--git-dir'], { ...process.env, ...env })) !== null;
+}
+
+async function initializeShadowRepo(root: string, dir: string, env: NodeJS.ProcessEnv): Promise<void> {
+  // Existing stores need no initialization lock at all. Besides being faster,
+  // this means a stale init lock can never turn an already-healthy history off.
+  if (await usableShadowRepo(root, dir, env)) return;
+
+  await withHistoryInitLock(root, async () => {
+    // A second process may have completed setup while this one waited.
+    if (await usableShadowRepo(root, dir, env)) return;
+
+    await mkdir(join(root, TOOL_DIR), { recursive: true });
+    await ignoreToolStorage(root);
+    // Never fatal: failing to bring an old timeline forward costs the author
+    // that timeline, but failing the compile over it costs them more.
+    await adoptLegacyCache(root, dir).catch(() => {});
+    if (await usableShadowRepo(root, dir, env)) return;
+
+    await mkdir(dir, { recursive: true });
+    await clearStaleInitConfigLock(dir);
+    try {
+      await git(root, ['init', '--quiet'], { ...process.env, ...env });
+    } catch (error) {
+      // Older TeXChronicle processes do not know about the init lock. If one
+      // raced us and finished successfully, accept the now-usable repository
+      // instead of caching its transient config.lock error for this session.
+      for (let attempt = 0; attempt < 10; attempt++) {
+        if (await usableShadowRepo(root, dir, env)) return;
+        await delay(50);
+      }
+      throw error;
+    }
+    if (!(await usableShadowRepo(root, dir, env))) {
+      throw new Error('git init returned successfully but the history repository is not usable');
+    }
+  });
+}
 
 /**
  * Decide where this project's history lives, creating the shadow repo on first
  * use. Cached per project for the process's lifetime.
  */
 export async function historyRepo(root: string): Promise<HistoryRepo> {
-  const hit = cache.get(root);
+  const key = projectKey(root);
+  const hit = cache.get(key);
   if (hit) return hit;
 
+  const pending = initializing.get(key);
+  if (pending) return pending;
+
+  const task = resolveHistoryRepo(root, key);
+  initializing.set(key, task);
+  try {
+    return await task;
+  } finally {
+    if (initializing.get(key) === task) initializing.delete(key);
+  }
+}
+
+async function resolveHistoryRepo(root: string, key: string): Promise<HistoryRepo> {
   if (!(await hasGit())) {
-    cache.set(root, NO_GIT);
+    cache.set(key, NO_GIT);
     return NO_GIT;
   }
 
   // Use an author's repository only when its work-tree root is exactly the
-  // MagicTeX project root. A paper in `monorepo/papers/draft` must not share one
+  // TeXChronicle project root. A paper in `monorepo/papers/draft` must not share one
   // hidden ref with every sibling project, and Git object paths there are
   // repository-relative rather than project-relative. A project-local shadow
   // repo keeps its paths, restores and Dropbox portability self-contained.
@@ -232,32 +310,19 @@ export async function historyRepo(root: string): Promise<HistoryRepo> {
   if (repositoryRoot && await sameDirectory(root, repositoryRoot)) {
     await ignoreToolStorage(root);
     const resolved: HistoryRepo = { mode: 'project', env: { ...IDENTITY } };
-    cache.set(root, resolved);
+    cache.set(key, resolved);
     return resolved;
   }
 
   const dir = join(root, TOOL_DIR, SHADOW);
   const env: NodeJS.ProcessEnv = { ...IDENTITY, GIT_DIR: dir, GIT_WORK_TREE: root };
   try {
-    if (!(await isRepo(dir))) {
-      await mkdir(join(root, TOOL_DIR), { recursive: true });
-      await ignoreToolStorage(root);
-      // Never fatal: failing to bring an old timeline forward costs the author
-      // that timeline, but failing the compile over it costs them more.
-      await adoptLegacyCache(root, dir).catch(() => {});
-    }
-    await mkdir(dir, { recursive: true });
+    await initializeShadowRepo(root, dir, env);
     // Existing shadow repos predate render artifacts; upgrade their ignore file
     // too, not only newly-created stores.
     await ignoreToolStorage(root);
-    // `git init` is idempotent, but checking first keeps a re-init out of the
-    // common path and makes a corrupted directory visible as a failure here
-    // rather than as a confusing error on the first commit.
-    if (!(await isRepo(dir))) {
-      await git(root, ['init', '--quiet'], { ...process.env, ...env });
-    }
     const resolved: HistoryRepo = { mode: 'shadow', env };
-    cache.set(root, resolved);
+    cache.set(key, resolved);
     return resolved;
   } catch (err) {
     // Degrade to no history rather than failing the compile that triggered this
@@ -268,7 +333,9 @@ export async function historyRepo(root: string): Promise<HistoryRepo> {
       env: {},
       detail: `${dir}: ${(err as Error)?.message ?? String(err)}`,
     };
-    cache.set(root, resolved);
+    // Do not memoize a transient file lock, Dropbox race, or repaired
+    // permission problem for the entire process lifetime. Concurrent callers
+    // still share the single attempt above; the next request may self-heal.
     return resolved;
   }
 }
@@ -276,7 +343,13 @@ export async function historyRepo(root: string): Promise<HistoryRepo> {
 /** Reset the memo — for tests, and for a project whose git status changed under
  *  us (someone ran `git init` while the server was up). */
 export function forgetHistoryRepo(root?: string): void {
-  if (root) cache.delete(root);
-  else cache.clear();
+  if (root) {
+    const key = projectKey(root);
+    cache.delete(key);
+    initializing.delete(key);
+  } else {
+    cache.clear();
+    initializing.clear();
+  }
   gitPresent = undefined;
 }

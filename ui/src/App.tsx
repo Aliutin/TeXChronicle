@@ -164,7 +164,7 @@ export default function App() {
   const refreshComments = useCallback(() => { fetchComments().then(setComments).catch(() => {}); }, []);
   useEffect(() => { refreshComments(); }, [refreshComments]);
 
-  const { status, errorLog, reloadTick, pdfName, compileSeq } = useLive((m) => {
+  const { status, errorLog, reloadTick, pdfName, pdfCheckpoint, compileSeq } = useLive((m) => {
     if (m.type === 'comments-changed') { refreshComments(); setRightOpen(true); }
   });
 
@@ -202,9 +202,9 @@ export default function App() {
       {status === 'stopped' && (
         <div className="banner-dead" role="alert">
           <strong>This window is no longer live.</strong>{' '}
-          The MagicTeX server it was connected to has stopped, so everything below is a
+          The TeXChronicle server it was connected to has stopped, so everything below is a
           snapshot from when it did — <em>including any error message</em>. Restart
-          MagicTeX from the terminal; that opens a new live window at a new address.
+          TeXChronicle from the terminal; that opens a new live window at a new address.
           This one can be closed.
         </div>
       )}
@@ -224,7 +224,7 @@ export default function App() {
             </>
           ) : (
             <>
-              MagicTeX couldn't create its history store, so edits aren't being recorded.
+              TeXChronicle couldn't create its history store, so edits aren't being recorded.
               Everything else works, and <code>git</code> itself is fine — the problem is
               this path: <code>{historyDetail ?? 'unknown error'}</code>
             </>
@@ -371,6 +371,7 @@ export default function App() {
                 onSelectComment={historicalPdf ? undefined : onSelectFromPdf}
                 onSyncToSource={historicalPdf ? undefined : onSyncToSource}
                 syncTarget={syncToPdf}
+                pdfCheckpoint={historicalPdf ? undefined : pdfCheckpoint}
               />
             </ErrorBoundary>
           )}
@@ -384,7 +385,13 @@ export default function App() {
             <button className="ghost" onClick={() => setRightOpen(false)} title="Collapse">»</button>
           </div>
           <ErrorBoundary name="Comments panel">
-            <CommentsPanel comments={comments} selectedId={selectedComment} onJump={jumpToComment} />
+            <CommentsPanel
+              comments={comments}
+              selectedId={selectedComment}
+              onJump={jumpToComment}
+              liveStatus={status}
+              pdfCheckpoint={historicalPdf ? undefined : pdfCheckpoint}
+            />
           </ErrorBoundary>
         </div>
       </div>

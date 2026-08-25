@@ -1,19 +1,19 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.ZoeLinUTS/magictex",
-  "title": "MagicTeX",
-  "description": "LaTeX editor for AI agents: live PDF preview, PDF comments that drive edits, git history",
-  "version": "0.1.10",
-  "websiteUrl": "https://github.com/ZoeLinUTS/MagicTeX-mcp",
+  "name": "io.github.Aliutin/texchronicle",
+  "title": "TeXChronicle",
+  "description": "LaTeX workspace with editable live prose, exact PDF preview, anchored comments, and section-aware Git history",
+  "version": "0.1.12",
+  "websiteUrl": "https://github.com/Aliutin/TeXChronicle",
   "repository": {
-    "url": "https://github.com/ZoeLinUTS/MagicTeX-mcp",
+    "url": "https://github.com/Aliutin/TeXChronicle",
     "source": "github"
   },
   "packages": [
     {
       "registryType": "npm",
-      "identifier": "magictex-mcp",
-      "version": "0.1.10",
+      "identifier": "texchronicle",
+      "version": "0.1.12",
       "transport": {
         "type": "stdio"
       }

@@ -1,5 +1,5 @@
 name: Bug report
-description: Something in MagicTeX doesn't work the way it should
+description: Something in TeXChronicle doesn't work the way it should
 labels: ["bug"]
 body:
   - type: markdown
@@ -7,7 +7,7 @@ body:
       value: |
         Before filing: if a LaTeX package just isn't in the bundled TeX Live
         subset, that's expected — see the package-coverage section of the
-        [user guide](https://github.com/ZoeLinUTS/MagicTeX-mcp/blob/main/docs/USER-GUIDE.md).
+        [user guide](https://github.com/Aliutin/TeXChronicle/blob/main/docs/USER-GUIDE.md).
 
   - type: textarea
     id: what-happened
@@ -47,8 +47,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: MagicTeX version
-      description: "`npm ls magictex-mcp`, or the commit if running from a clone."
+      label: TeXChronicle version
+      description: "`npm ls texchronicle`, or the commit if running from a clone."
     validations:
       required: true
 

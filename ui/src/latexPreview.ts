@@ -60,15 +60,95 @@ export type PreviewBlock =
   | (LocatedBlock & { type: 'table'; number: string; caption: InlineNode[]; rows: PreviewTableRow[] })
   | (LocatedBlock & { type: 'quote'; content: InlineNode[] })
   | (LocatedBlock & { type: 'code'; content: string; language?: string })
+  | (LocatedBlock & { type: 'image'; assets: string[] })
+  | (LocatedBlock & {
+      type: 'frame'; number: number; title: InlineNode[]; subtitle: InlineNode[];
+      blocks: PreviewBlock[]; plain: boolean; overlays: boolean;
+    })
+  | (LocatedBlock & { type: 'columns'; columns: PreviewBlock[][] })
+  | (LocatedBlock & {
+      type: 'callout'; title: InlineNode[]; tone: 'neutral' | 'accent' | 'success';
+      blocks: PreviewBlock[];
+    })
   | (LocatedBlock & { type: 'notice'; label: string; detail?: string })
   | (LocatedBlock & { type: 'include'; path: string });
 
 export interface PreviewDocument {
+  kind: 'article' | 'presentation';
+  aspectRatio: '4:3' | '16:9';
   blocks: PreviewBlock[];
   footnotes: PreviewFootnote[];
   references: Record<string, PreviewReference>;
   approximated: string[];
   wordCount: number;
+}
+
+function shiftInlineNodes(nodes: InlineNode[], offset: number, footnoteOffset: number): InlineNode[] {
+  return nodes.map((node): InlineNode => {
+    if (node.type === 'text') {
+      return node.source ? {
+        ...node,
+        source: {
+          ...node.source,
+          from: node.source.from + offset,
+          to: node.source.to + offset,
+          boundaries: node.source.boundaries.map((boundary) => boundary + offset),
+        },
+      } : node;
+    }
+    if (node.type === 'footnote') return { ...node, number: node.number + footnoteOffset };
+    if ('children' in node) return { ...node, children: shiftInlineNodes(node.children, offset, footnoteOffset) };
+    return node;
+  });
+}
+
+/** Rebase a recursively parsed presentation fragment onto the complete source.
+ * Keeping this transformation structural is what lets prose inside a frame,
+ * callout, or column retain the same smallest-slice editing guarantees as an
+ * ordinary article paragraph. */
+function shiftPreviewBlock(block: PreviewBlock, offset: number, lineDelta: number, footnoteOffset: number): PreviewBlock {
+  const located = { ...block, line: block.line + lineDelta };
+  if (block.type === 'title') return {
+    ...located,
+    title: shiftInlineNodes(block.title, offset, footnoteOffset),
+    author: shiftInlineNodes(block.author, offset, footnoteOffset),
+    date: shiftInlineNodes(block.date, offset, footnoteOffset),
+  } as PreviewBlock;
+  if (block.type === 'heading' || block.type === 'paragraph' || block.type === 'quote') {
+    return { ...located, content: shiftInlineNodes(block.content, offset, footnoteOffset) } as PreviewBlock;
+  }
+  if (block.type === 'list') return {
+    ...located,
+    items: block.items.map((item) => ({
+      ...(item.label ? { label: shiftInlineNodes(item.label, offset, footnoteOffset) } : {}),
+      content: shiftInlineNodes(item.content, offset, footnoteOffset),
+    })),
+  } as PreviewBlock;
+  if (block.type === 'figure') return { ...located, caption: shiftInlineNodes(block.caption, offset, footnoteOffset) } as PreviewBlock;
+  if (block.type === 'table') return {
+    ...located,
+    caption: shiftInlineNodes(block.caption, offset, footnoteOffset),
+    rows: block.rows.map((row) => ({
+      ...row,
+      cells: row.cells.map((cell) => ({ ...cell, content: shiftInlineNodes(cell.content, offset, footnoteOffset) })),
+    })),
+  } as PreviewBlock;
+  if (block.type === 'frame') return {
+    ...located,
+    title: shiftInlineNodes(block.title, offset, footnoteOffset),
+    subtitle: shiftInlineNodes(block.subtitle, offset, footnoteOffset),
+    blocks: block.blocks.map((child) => shiftPreviewBlock(child, offset, lineDelta, footnoteOffset)),
+  } as PreviewBlock;
+  if (block.type === 'columns') return {
+    ...located,
+    columns: block.columns.map((column) => column.map((child) => shiftPreviewBlock(child, offset, lineDelta, footnoteOffset))),
+  } as PreviewBlock;
+  if (block.type === 'callout') return {
+    ...located,
+    title: shiftInlineNodes(block.title, offset, footnoteOffset),
+    blocks: block.blocks.map((child) => shiftPreviewBlock(child, offset, lineDelta, footnoteOffset)),
+  } as PreviewBlock;
+  return located as PreviewBlock;
 }
 
 interface Group {
@@ -115,6 +195,7 @@ const LAYOUT_ONLY = new Set([
   'selectfont', 'arraybackslash', 'onehalfspacing', 'singlespacing', 'doublespacing', 'maketitle',
   'newpage', 'clearpage', 'pagebreak', 'nopagebreak', 'allowbreak', 'linebreak',
   'toprule', 'midrule', 'bottomrule', 'hline', 'addlinespace', 'tableofcontents',
+  'pause', 'onslide', 'titlepage', 'againframe', 'mode',
 ]);
 
 const DROP_WITH_ARGS = new Set([
@@ -122,6 +203,7 @@ const DROP_WITH_ARGS = new Set([
   'setlength', 'addtolength', 'setcounter', 'addtocounter', 'renewcommand', 'newcommand',
   'providecommand', 'DeclareRobustCommand', 'fontsize', 'fontencoding', 'hypertarget',
   'phantomsection', 'bibliographystyle', 'bibliography', 'includegraphics', 'cline', 'begin', 'end',
+  'frametitle', 'framesubtitle', 'transduration', 'transblindshorizontal', 'transblindsvertical',
 ]);
 
 const SYMBOLS: Record<string, string> = {
@@ -212,6 +294,28 @@ export function maskLatexFalseBlocks(source: string): string {
     cursor = end;
   }
   if (!visible) mask(cursor, source.length);
+  return chars.join('');
+}
+
+/** Hide Beamer overlay selectors while retaining exact source offsets.
+ *
+ * Live shows the union of all overlay content in one editable frame card. A
+ * selector such as `<2->` controls when content appears in the PDF; it is not
+ * prose and should never leak into the visual editor as literal text. The
+ * expression is intentionally restricted to overlay-aware Beamer commands so
+ * ordinary mathematical comparisons remain untouched. */
+export function maskBeamerOverlays(source: string): string {
+  const chars = source.split('');
+  const scan = maskLatexLiteralRegions(source);
+  const overlay = /\\(?:item|only|uncover|visible|invisible|onslide|alt|temporal|alert|action|pause)\*?\s*<[^>\r\n]*>/g;
+  for (let match = overlay.exec(scan); match; match = overlay.exec(scan)) {
+    const open = match[0].indexOf('<');
+    if (open < 0) continue;
+    const from = match.index + open;
+    for (let index = from; index < match.index + match[0].length; index++) {
+      if (chars[index] !== '\n' && chars[index] !== '\r') chars[index] = ' ';
+    }
+  }
   return chars.join('');
 }
 
@@ -643,7 +747,7 @@ export function parseInline(text: string, context: ParseContext): InlineNode[] {
       i = lastUsedEnd(macro, macro.name === 'foreignlanguage' ? 2 : 1);
       continue;
     }
-    if (['mbox', 'makebox', 'parbox', 'raisebox', 'multicolumn', 'multirow', 'makecell', 'shortstack'].includes(macro.name) && macro.args.length) {
+    if (['mbox', 'makebox', 'parbox', 'raisebox', 'resizebox', 'scalebox', 'adjustbox', 'multicolumn', 'multirow', 'makecell', 'shortstack'].includes(macro.name) && macro.args.length) {
       const contentArg = macro.args[macro.args.length - 1];
       nodes.push(...childrenFor(contentArg, context));
       i = contentArg.end;
@@ -659,20 +763,23 @@ export function parseInline(text: string, context: ParseContext): InlineNode[] {
     }
     if (LAYOUT_ONLY.has(macro.name)) {
       if (macro.name === 'par' || macro.name === 'linebreak') nodes.push({ type: 'break' });
-      i = macro.headEnd;
+      i = macro.options[macro.options.length - 1]?.end ?? macro.headEnd;
       continue;
     }
     if (DROP_WITH_ARGS.has(macro.name)) {
-      i = macro.args.length ? macro.args[macro.args.length - 1].end : macro.headEnd;
+      i = macro.args[macro.args.length - 1]?.end ?? macro.options[macro.options.length - 1]?.end ?? macro.headEnd;
       continue;
     }
 
-    // Project-local presentation macros usually wrap visible text. Preserve
-    // their first argument instead of failing the whole preview.
-    if (macro.args[0]) {
+    // Project-local presentation macros commonly take style/configuration
+    // arguments first and visible content last (for example \pill{blue}{Text}).
+    // Preserving the last argument gives a useful tolerant rendering without
+    // inventing project-specific command definitions.
+    const visibleArgument = macro.args[macro.args.length - 1];
+    if (visibleArgument) {
       context.approximated.add(`\\${macro.name}`);
-      nodes.push(...childrenFor(macro.args[0], context));
-      i = macro.args[0].end;
+      nodes.push(...childrenFor(visibleArgument, context));
+      i = visibleArgument.end;
       continue;
     }
 
@@ -881,12 +988,19 @@ function letterNumber(value: number): string {
 
 /** Parse a complete .tex document or a standalone included section. Never throws. */
 export function parseLatexPreview(source: string): PreviewDocument {
-  const masked = maskLatexFalseBlocks(maskLatexComments(source));
+  const masked = maskBeamerOverlays(maskLatexFalseBlocks(maskLatexComments(source)));
   const footnotes: PreviewFootnote[] = [];
   const approximated = new Set<string>();
   const references: Record<string, PreviewReference> = {};
   const baseContext: ParseContext = { footnotes, approximated, line: 1, offset: undefined };
   const metadata = titleMetadata(masked, baseContext);
+  const beamerClass = /\\documentclass\s*(?:\[([^\]]*)\]\s*)?\{beamer\}/.exec(masked);
+  const kind: PreviewDocument['kind'] = beamerClass || /\\begin\s*\{frame\}/.test(masked)
+    ? 'presentation'
+    : 'article';
+  const aspectRatio: PreviewDocument['aspectRatio'] = /(?:^|,)\s*aspectratio\s*=\s*169\s*(?:,|$)/.test(beamerClass?.[1] ?? '')
+    ? '16:9'
+    : '4:3';
 
   const begin = /\\begin\s*\{document\}/.exec(masked);
   const bodyStart = begin ? begin.index + begin[0].length : 0;
@@ -917,7 +1031,7 @@ export function parseLatexPreview(source: string): PreviewDocument {
 
   const blocks: PreviewBlock[] = [];
   let section = 0, subsection = 0, subsubsection = 0;
-  let figure = 0, table = 0, equation = 0;
+  let figure = 0, table = 0, equation = 0, frame = 0;
   let appendix = false;
   let titlePlaced = false;
 
@@ -929,11 +1043,183 @@ export function parseLatexPreview(source: string): PreviewDocument {
     if (previewPlainText(content)) blocks.push({ type: 'paragraph', line, content, align });
   };
 
+  const adoptFragment = (fragment: string, absoluteStart: number): PreviewBlock[] => {
+    if (!fragment.trim()) return [];
+    const child = parseLatexPreview(fragment);
+    const footnoteOffset = footnotes.length;
+    const lineDelta = lineOf(absoluteStart) - 1;
+    for (const note of child.footnotes) {
+      footnotes.push({
+        ...note,
+        number: note.number + footnoteOffset,
+        line: note.line + lineDelta,
+        content: shiftInlineNodes(note.content, absoluteStart, footnoteOffset),
+      });
+    }
+    Object.assign(references, child.references);
+    for (const approximation of child.approximated) approximated.add(approximation);
+    return child.blocks.map((block) => shiftPreviewBlock(block, absoluteStart, lineDelta, footnoteOffset));
+  };
+
   const parseEnvironment = (environment: ReturnType<typeof environmentAt>, line: number): PreviewBlock[] => {
     if (!environment) return [];
     const name = environment.name;
     const raw = masked.slice(environment.innerStart, environment.endStart);
     const lower = name.toLowerCase();
+
+    const skipWhitespace = (value: string, start: number): number => {
+      let cursor = start;
+      while (/\s/.test(value[cursor] ?? '')) cursor++;
+      return cursor;
+    };
+    const skipOverlay = (value: string, start: number): { cursor: number; found: boolean } => {
+      const cursor = skipWhitespace(value, start);
+      if (value[cursor] !== '<') return { cursor, found: false };
+      const end = value.indexOf('>', cursor + 1);
+      return { cursor: end >= 0 ? end + 1 : value.length, found: true };
+    };
+
+    if (lower === 'frame') {
+      let cursor = 0;
+      let overlayHeader = false;
+      const optionValues: string[] = [];
+      // Beamer permits overlay and option groups in either order before the
+      // frame title: \begin{frame}<2->[fragile]{Title}.
+      for (;;) {
+        const overlay = skipOverlay(raw, cursor);
+        cursor = overlay.cursor;
+        overlayHeader ||= overlay.found;
+        const optionAt = skipWhitespace(raw, cursor);
+        if (raw[optionAt] !== '[') { cursor = optionAt; break; }
+        const option = readGroup(raw, optionAt);
+        if (!option) break;
+        optionValues.push(option.value);
+        cursor = option.end;
+      }
+
+      let title: InlineNode[] = [];
+      let subtitle: InlineNode[] = [];
+      cursor = skipWhitespace(raw, cursor);
+      if (raw[cursor] === '{') {
+        const group = readGroup(raw, cursor);
+        if (group) {
+          title = parseInline(group.value, {
+            ...baseContext,
+            line: lineOf(environment.innerStart + group.start + 1),
+            offset: environment.innerStart + group.start + 1,
+          });
+          cursor = group.end;
+        }
+        cursor = skipWhitespace(raw, cursor);
+        if (raw[cursor] === '{') {
+          const group = readGroup(raw, cursor);
+          if (group) {
+            subtitle = parseInline(group.value, {
+              ...baseContext,
+              line: lineOf(environment.innerStart + group.start + 1),
+              offset: environment.innerStart + group.start + 1,
+            });
+            cursor = group.end;
+          }
+        }
+      }
+
+      const bodyStart = environment.innerStart + cursor;
+      const body = raw.slice(cursor);
+      const titleMacro = findCommand(body, 'frametitle');
+      const subtitleMacro = findCommand(body, 'framesubtitle');
+      if (!title.length && titleMacro?.args[0]) {
+        title = parseInline(titleMacro.args[0].value, {
+          ...baseContext,
+          line: lineOf(bodyStart + titleMacro.args[0].start + 1),
+          offset: bodyStart + titleMacro.args[0].start + 1,
+        });
+      }
+      if (!subtitle.length && subtitleMacro?.args[0]) {
+        subtitle = parseInline(subtitleMacro.args[0].value, {
+          ...baseContext,
+          line: lineOf(bodyStart + subtitleMacro.args[0].start + 1),
+          offset: bodyStart + subtitleMacro.args[0].start + 1,
+        });
+      }
+
+      const children = adoptFragment(body, bodyStart);
+      const titlePage = /\\(?:titlepage|maketitle)\b/.test(body);
+      if (titlePage && metadata && !children.some((block) => block.type === 'title')) {
+        children.unshift({ type: 'title', line: metadata.line, title: metadata.title, author: metadata.author, date: metadata.date });
+        titlePlaced = true;
+      }
+      const originalRaw = source.slice(environment.innerStart, environment.endStart);
+      const overlays = overlayHeader || /\\(?:pause|only|uncover|visible|invisible|onslide|alt|temporal)\b|\\item\s*</.test(originalRaw);
+      return [{
+        type: 'frame',
+        line,
+        number: ++frame,
+        title,
+        subtitle,
+        blocks: children,
+        plain: optionValues.some((value) => /(?:^|,)\s*plain\s*(?:,|$)/.test(value)),
+        overlays,
+      }];
+    }
+
+    if (lower === 'columns') {
+      const columns: PreviewBlock[][] = [];
+      const columnBegin = /\\begin\s*\{column\}/g;
+      for (let found = columnBegin.exec(raw); found; found = columnBegin.exec(raw)) {
+        const column = environmentAt(raw, found.index);
+        if (!column) continue;
+        let cursor = skipWhitespace(raw, column.innerStart);
+        if (raw[cursor] === '[') cursor = readGroup(raw, cursor)?.end ?? cursor;
+        cursor = skipWhitespace(raw, cursor);
+        // The mandatory width is layout, not visible column content.
+        if (raw[cursor] === '{') cursor = readGroup(raw, cursor)?.end ?? cursor;
+        const absoluteStart = environment.innerStart + cursor;
+        columns.push(adoptFragment(raw.slice(cursor, column.endStart), absoluteStart));
+        columnBegin.lastIndex = Math.max(columnBegin.lastIndex, column.end);
+      }
+      // Also support the compact \column{.5\textwidth} form.
+      if (!columns.length) {
+        const columnMacro = [...raw.matchAll(/\\column\b/g)];
+        for (let index = 0; index < columnMacro.length; index++) {
+          const macro = readMacro(raw, columnMacro[index].index!);
+          if (!macro) continue;
+          const start = macro.end;
+          const end = columnMacro[index + 1]?.index ?? raw.length;
+          columns.push(adoptFragment(raw.slice(start, end), environment.innerStart + start));
+        }
+      }
+      if (columns.length) return [{ type: 'columns', line, columns }];
+    }
+
+    const callout = /(?:block|definition|theorem|lemma|proposition|corollary|example|proof)$/.test(lower) ||
+      /^(?:keyresult|checkblock|pairblock|definitionblock|exampleblock|alertblock)$/.test(lower);
+    if (callout) {
+      let cursor = skipWhitespace(raw, 0);
+      const overlay = skipOverlay(raw, cursor);
+      cursor = overlay.cursor;
+      cursor = skipWhitespace(raw, cursor);
+      let heading: Group | null = null;
+      if (raw[cursor] === '[' || (/(?:block)$/.test(lower) || lower === 'keyresult') && raw[cursor] === '{') {
+        heading = readGroup(raw, cursor);
+        if (heading) cursor = heading.end;
+      }
+      const title = heading ? parseInline(heading.value, {
+        ...baseContext,
+        line: lineOf(environment.innerStart + heading.start + 1),
+        offset: environment.innerStart + heading.start + 1,
+      }) : [];
+      const tone: 'neutral' | 'accent' | 'success' = /alert|warning|danger/.test(lower)
+        ? 'accent'
+        : /example|check|keyresult/.test(lower) ? 'success' : 'neutral';
+      return [{
+        type: 'callout',
+        line,
+        title,
+        tone,
+        blocks: adoptFragment(raw.slice(cursor), environment.innerStart + cursor),
+      }];
+    }
 
     if (/^(?:equation\*?|align\*?|alignat\*?|gather\*?|multline\*?|displaymath|math)$/.test(lower)) {
       const numbered = !lower.endsWith('*') && lower !== 'displaymath' && lower !== 'math';
@@ -1066,7 +1352,7 @@ export function parseLatexPreview(source: string): PreviewDocument {
 
   const isBlockStart = (trimmed: string): boolean =>
     /^\\(?:section|subsection|subsubsection|paragraph)\*?\b/.test(trimmed) ||
-    /^\\begin\s*\{/.test(trimmed) || /^\\(?:maketitle|appendix|input|include|bibliography)\b/.test(trimmed) ||
+    /^\\begin\s*\{/.test(trimmed) || /^\\(?:maketitle|appendix|input|include|includegraphics|bibliography)\b/.test(trimmed) ||
     /^\\(?:title|author|date|thanks)\b/.test(trimmed) || trimmed.startsWith('\\[') || trimmed.startsWith('$$');
 
   for (let i = 0; i < lines.length;) {
@@ -1141,6 +1427,20 @@ export function parseLatexPreview(source: string): PreviewDocument {
       continue;
     }
 
+    if (/^\\includegraphics\b/.test(trimmed)) {
+      const assets: string[] = [];
+      let searchAt = absolute;
+      for (;;) {
+        const graphic = findCommand(masked, 'includegraphics', searchAt);
+        if (!graphic || graphic.start >= sourceLine.end) break;
+        if (graphic.args[0]?.value.trim()) assets.push(graphic.args[0].value.trim());
+        searchAt = Math.max(graphic.end, graphic.start + 1);
+      }
+      if (assets.length) blocks.push({ type: 'image', line: sourceLine.number, assets });
+      i = Math.max(i + 1, firstLineAtOrAfter(searchAt));
+      continue;
+    }
+
     const includeHead = /^\\(?:input|include)\b/.exec(trimmed);
     if (includeHead) {
       const macro = readMacro(masked, absolute);
@@ -1174,20 +1474,30 @@ export function parseLatexPreview(source: string): PreviewDocument {
     if (i === paragraphStart) i++;
   }
 
-  if (metadata && !titlePlaced && begin) blocks.unshift({ type: 'title', line: metadata.line, title: metadata.title, author: metadata.author, date: metadata.date });
+  if (metadata && !titlePlaced && begin && kind === 'article') {
+    blocks.unshift({ type: 'title', line: metadata.line, title: metadata.title, author: metadata.author, date: metadata.date });
+  }
 
-  const renderedText = blocks.flatMap((block): string[] => {
+  const renderedTextForBlock = (block: PreviewBlock): string[] => {
     if (block.type === 'title') return [previewPlainText(block.title), previewPlainText(block.author), previewPlainText(block.date)];
     if (block.type === 'heading' || block.type === 'paragraph' || block.type === 'quote') return [previewPlainText(block.content)];
     if (block.type === 'list') return block.items.flatMap((item) => [previewPlainText(item.label ?? []), previewPlainText(item.content)]);
     if (block.type === 'figure') return [previewPlainText(block.caption)];
     if (block.type === 'table') return [previewPlainText(block.caption), ...block.rows.flatMap((row) => row.cells.map((cell) => previewPlainText(cell.content)))];
+    if (block.type === 'frame') return [
+      previewPlainText(block.title),
+      previewPlainText(block.subtitle),
+      ...block.blocks.flatMap(renderedTextForBlock),
+    ];
+    if (block.type === 'columns') return block.columns.flatMap((column) => column.flatMap(renderedTextForBlock));
+    if (block.type === 'callout') return [previewPlainText(block.title), ...block.blocks.flatMap(renderedTextForBlock)];
     if (block.type === 'code') return [block.content];
     if (block.type === 'notice') return [block.label, block.detail ?? ''];
     return [];
-  });
+  };
+  const renderedText = blocks.flatMap(renderedTextForBlock);
   renderedText.push(...footnotes.map((footnote) => previewPlainText(footnote.content)));
   const wordCount = renderedText.join(' ').split(/\s+/).filter(Boolean).length;
 
-  return { blocks, footnotes, references, approximated: [...approximated].sort(), wordCount };
+  return { kind, aspectRatio, blocks, footnotes, references, approximated: [...approximated].sort(), wordCount };
 }

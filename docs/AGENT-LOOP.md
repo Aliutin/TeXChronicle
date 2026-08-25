@@ -66,8 +66,8 @@ The comment inbox has three states, which chain a whole review cycle:
    **suggestion** (a purple dashed highlight on the PDF, a card in the *Suggested* section):
 
    ```
-   Review my paper using my academic-paper-revision skill
-   (github.com/ZoeLinUTS/Academic-paper-revision). For each issue, call add_comment
+   Review my paper using my installed academic-review skill.
+   For each issue, call add_comment
    with the exact quoted passage and your comment. Don't edit the source yet.
    ```
 
@@ -89,7 +89,7 @@ The comment inbox has three states, which chain a whole review cycle:
 ## Ultra-agents ⚡
 
 > [!CAUTION]
-> This is MagicTeX's most powerful command, and its least supervised — no per-round
+> This is TeXChronicle's most powerful command, and its least supervised — no per-round
 > approval from you, by design. Read this whole section before running it at a high
 > `depth`.
 

@@ -51,9 +51,9 @@ export function tooOldMessage(have, floor) {
   var need = floor.join('.');
   return (
     '\n' +
-    '✖ MagicTeX needs Node ' + need + ' or newer — you are running v' + have + '.\n' +
+    '✖ TeXChronicle needs Node ' + need + ' or newer — you are running v' + have + '.\n' +
     '\n' +
-    '  This is the floor chokidar and playwright actually need. Below it MagicTeX\n' +
+    '  This is the floor chokidar and playwright actually need. Below it TeXChronicle\n' +
     '  fails while loading them, in ways that never mention Node.\n' +
     '\n' +
     '  Install the current LTS from https://nodejs.org/ — the macOS and Windows\n' +

@@ -43,9 +43,17 @@ export interface Comment {
   replies?: Reply[];  // a thread of follow-ups (human ↔ agents)
   created: string;
   createdCheckpoint?: string;
+  /** Best source location known for the quoted PDF text. It lets a partial
+   * restore warn only comments from the affected file when possible. */
+  sourceFile?: string;
+  sourceLine?: number;
   resolvedNote?: string;
   resolvedAt?: string;
   resolvedCheckpoint?: string;
+  /** The clean rendered checkpoint on which a post-restore warning was last
+   * explicitly verified. Future older restores compare against this version. */
+  verifiedCheckpoint?: string;
+  verifiedAt?: string;
   /** An older version was restored after resolution. The fix may have been
    * undone; keep the comment resolved but ask the human to verify or reopen. */
   restoreReview?: RestoreReview;
@@ -61,7 +69,7 @@ function storePath(root: string): string {
 export class CommentStoreUnreadableError extends Error {
   constructor(path: string, cause: unknown) {
     super(
-      `MagicTeX could not read ${path}: ${cause instanceof Error ? cause.message : String(cause)}. ` +
+      `TeXChronicle could not read ${path}: ${cause instanceof Error ? cause.message : String(cause)}. ` +
       'Refusing to touch it — writing now would replace every comment it holds. ' +
       'Fix or move the file, then try again.',
     );
@@ -113,11 +121,23 @@ export async function listComments(root: string): Promise<Comment[]> {
   // can be hand-edited, written by an older version, or produced by an agent, so
   // returning it as Comment[] unchecked is a claim the type system cannot make —
   // and one missing `rects` was once enough to take down the whole PDF pane.
-  for (const c of parsed as Comment[]) {
-    if (!c) continue;
+  for (const value of parsed) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new CommentStoreUnreadableError(path, new Error('every comment must be a JSON object'));
+    }
+    const c = value as Comment;
     if ((c.status as string) === 'pending') c.status = 'accepted'; // pre-rename files
     if (!Array.isArray(c.rects)) c.rects = [];
     if (!Array.isArray(c.replies)) c.replies = [];
+    if (c.restoreReview && (
+      typeof c.restoreReview !== 'object' ||
+      typeof c.restoreReview.checkpoint !== 'string' ||
+      !['project', 'section', 'file'].includes(c.restoreReview.scope)
+    )) delete c.restoreReview;
+    if (c.sourceFile !== undefined && typeof c.sourceFile !== 'string') delete c.sourceFile;
+    if (c.sourceLine !== undefined && (!Number.isInteger(c.sourceLine) || c.sourceLine < 1)) delete c.sourceLine;
+    if (c.verifiedCheckpoint !== undefined && typeof c.verifiedCheckpoint !== 'string') delete c.verifiedCheckpoint;
+    if (c.verifiedAt !== undefined && typeof c.verifiedAt !== 'string') delete c.verifiedAt;
   }
   return parsed as Comment[];
 }
@@ -138,7 +158,7 @@ async function save(root: string, comments: Comment[]): Promise<void> {
 
 export async function addComment(
   root: string,
-  input: { page: number; quote: string; rects: CommentRect[]; text: string; role?: CommentRole; status?: CommentStatus; createdCheckpoint?: string },
+  input: { page: number; quote: string; rects: CommentRect[]; text: string; role?: CommentRole; status?: CommentStatus; createdCheckpoint?: string; sourceFile?: string; sourceLine?: number },
 ): Promise<Comment> {
   const comment: Comment = {
     id: randomBytes(6).toString('hex'),
@@ -155,6 +175,8 @@ export async function addComment(
     replies: [],
     created: new Date().toISOString(),
     ...(input.createdCheckpoint ? { createdCheckpoint: input.createdCheckpoint } : {}),
+    ...(input.sourceFile ? { sourceFile: String(input.sourceFile).replace(/\\/g, '/').slice(0, 1000) } : {}),
+    ...(Number.isInteger(input.sourceLine) && input.sourceLine! > 0 ? { sourceLine: input.sourceLine } : {}),
   };
   // The whole read -> mutate -> write runs as one cross-process critical
   // section, so two agents adding/resolving/replying to comments at the same
@@ -176,6 +198,8 @@ export async function updateComment(
     text?: string;
     resolvedCheckpoint?: string;
     restoreReview?: RestoreReview | null;
+    verifiedCheckpoint?: string;
+    verifiedAt?: string;
   },
 ): Promise<Comment | null> {
   return withLock(root, async () => {
@@ -189,15 +213,23 @@ export async function updateComment(
         c.resolvedAt = new Date().toISOString();
         if (patch.resolvedCheckpoint) c.resolvedCheckpoint = patch.resolvedCheckpoint;
         delete c.restoreReview;
+        delete c.verifiedCheckpoint;
+        delete c.verifiedAt;
       } else {
         delete c.resolvedAt;
         delete c.resolvedNote;
         delete c.resolvedCheckpoint;
         delete c.restoreReview;
+        delete c.verifiedCheckpoint;
+        delete c.verifiedAt;
       }
     }
     if (patch.resolvedNote !== undefined) c.resolvedNote = String(patch.resolvedNote).slice(0, 2000);
-    if (patch.restoreReview === null) delete c.restoreReview;
+    if (patch.restoreReview === null) {
+      delete c.restoreReview;
+      if (patch.verifiedCheckpoint) c.verifiedCheckpoint = String(patch.verifiedCheckpoint);
+      if (patch.verifiedAt) c.verifiedAt = String(patch.verifiedAt);
+    }
     else if (patch.restoreReview !== undefined && c.status === 'resolved') {
       c.restoreReview = {
         checkpoint: String(patch.restoreReview.checkpoint),

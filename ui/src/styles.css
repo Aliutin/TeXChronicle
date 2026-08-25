@@ -288,6 +288,56 @@ body.resizing-tree-wide .editor-scroll { pointer-events: none; }
               padding: 62px 78px 76px; color: #202124; background: #fff;
               box-shadow: 0 3px 18px rgba(24, 29, 36, .25);
               font: 16px/1.64 Georgia, 'Times New Roman', serif; }
+/* Beamer is a sequence of canvases, not one long sheet of paper. Live keeps
+   every frame independently scannable and editable while deliberately showing
+   all overlay content together; the adjacent PDF remains the exact animation. */
+.live-paper.live-deck { width: min(100%, 980px); min-height: 0; padding: 0; background: transparent;
+                        box-shadow: none; font: 14px/1.42 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+.live-frame { margin: 0 auto 28px; }
+.live-frame-meta { display: flex; align-items: center; gap: 8px; min-height: 24px; padding: 3px 9px;
+                   border-radius: 6px 6px 0 0; color: #cbd4df; background: #252a31;
+                   font: 700 9px/1.2 ui-sans-serif, system-ui, sans-serif; letter-spacing: .09em; }
+.live-overlay-badge { margin-left: auto; padding: 2px 6px; border: 1px solid #526b8d; border-radius: 999px;
+                      color: #bcd4f5; background: #2b3a4e; font-size: 8px; cursor: help; }
+.live-frame-canvas { box-sizing: border-box; display: flex; flex-direction: column; width: 100%; min-height: 420px;
+                     padding: 34px 42px 38px; border: 1px solid #c7cdd5; border-top: 0; border-radius: 0 0 6px 6px;
+                     color: #202833; background: #fff; box-shadow: 0 4px 18px rgba(24, 29, 36, .25); }
+.live-deck-4-3 .live-frame-canvas { aspect-ratio: 4 / 3; }
+.live-deck-16-9 .live-frame-canvas { aspect-ratio: 16 / 9; min-height: 0; }
+.live-frame-heading { flex: 0 0 auto; margin: 0 0 20px; padding-bottom: 9px; border-bottom: 3px solid #9eb8dd; }
+.live-frame-heading h2 { margin: 0; color: #183153; font-size: 24px; line-height: 1.18; letter-spacing: -.012em; }
+.live-frame-heading p { margin: 5px 0 0; color: #66758a; font-size: 13px; }
+.live-frame-content { flex: 1 1 auto; min-height: 0; }
+.live-frame-content .live-block p { text-align: left; }
+.live-frame-content > .live-block:first-child:not(.live-heading) { margin-top: 0; }
+.live-frame > .live-line { left: 8px; top: 31px; width: 34px; color: #60728b; }
+.live-frame-content .live-line, .live-column .live-line, .live-callout-content .live-line { left: -38px; width: 32px; }
+.live-frame-empty { display: grid; min-height: 210px; place-items: center; padding: 28px; color: #7a8490;
+                    border: 1px dashed #c8ced6; border-radius: 5px; text-align: center; }
+.live-frame-plain .live-frame-heading { border-bottom-color: transparent; }
+.live-frame .live-title { margin: 42px 0 20px; }
+.live-frame .live-title h1 { color: #183153; font-family: ui-sans-serif, system-ui, sans-serif; }
+.live-columns { margin: 8px 0 14px; }
+.live-columns-grid { display: grid; align-items: start; gap: 24px; }
+.live-column { min-width: 0; }
+.live-column > .live-block:first-child { margin-top: 0; }
+.live-callout { margin: 12px 0; border: 1px solid #9cb2cc; border-radius: 6px; background: #f4f7fb; }
+.live-callout-title { padding: 6px 10px; border-radius: 5px 5px 0 0; color: #fff; background: #486b95;
+                      font-weight: 750; line-height: 1.25; }
+.live-callout-content { padding: 9px 12px 4px; }
+.live-callout-content > .live-block:last-child p { margin-bottom: 6px; }
+.live-callout-accent { border-color: #d39090; background: #fff6f5; }
+.live-callout-accent > .live-callout-title { background: #a43e3e; }
+.live-callout-success { border-color: #85b69a; background: #f3faf6; }
+.live-callout-success > .live-callout-title { background: #28754a; }
+.live-slide-image { margin: 10px auto 16px; }
+.live-slide-image .live-figure-assets { grid-template-columns: minmax(0, 1fr); }
+.live-slide-image .live-asset-preview { max-height: 310px; }
+.live-slide-image .live-asset-visual { max-height: 280px; }
+.live-slide-image .live-asset-visual > img, .live-slide-image .live-asset-visual canvas { max-height: 270px; object-fit: contain; }
+.live-deck > .live-heading { margin: 22px 0 10px; padding: 9px 14px; border-radius: 5px;
+                             color: #dce5f0; background: #394554; }
+.live-deck > .live-heading h2, .live-deck > .live-heading h3 { margin: 0; padding: 0; border: 0; color: inherit; font-size: 14px; }
 .live-block { position: relative; }
 .live-line { position: absolute; z-index: 2; left: -60px; top: .2em; width: 42px; padding: 2px 4px;
              border-color: transparent; color: #a1a7af; background: transparent;
@@ -382,7 +432,13 @@ body.resizing-tree-wide .editor-scroll { pointer-events: none; }
   .live-preview-status > span:not(.live-badge):not(.spacer) { display: none; }
   .live-preview-scroll { padding: 12px 8px 30px; }
   .live-paper { padding: 42px 34px 58px; }
+  .live-paper.live-deck { padding: 0; }
+  .live-frame-canvas { min-height: 0; padding: 26px 26px 30px; }
+  .live-frame-heading h2 { font-size: 20px; }
+  .live-columns-grid { grid-template-columns: 1fr !important; gap: 10px; }
   .live-line { left: -32px; width: 28px; }
+  .live-frame > .live-line { left: 2px; }
+  .live-frame-content .live-line, .live-column .live-line, .live-callout-content .live-line { left: -25px; width: 22px; }
 }
 
 /* ── Comments panel ──────────────────────────────────────── */
@@ -418,6 +474,8 @@ button.ghost.tiny { font-size: 11px; padding: 1px 6px; margin-left: auto; }
 .comment-version { color: #8b949e; font-size: 11px; margin-top: 5px; font-family: ui-monospace, monospace; }
 .comment-restore-warning { color: #ffd580; background: rgba(255, 166, 0, .09); border-left: 2px solid #d29922;
                            font-size: 12px; line-height: 1.35; margin-top: 7px; padding: 6px 8px; }
+.comment-action-error { margin: 8px; padding: 8px 10px; border: 1px solid #a94442; border-radius: 6px;
+                        color: #ffd0cd; background: #3a2020; font-size: 12px; }
 .comment-actions { display: flex; gap: 8px; margin-top: 6px; }
 
 /* ── History ─────────────────────────────────────────────── */

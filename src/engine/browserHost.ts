@@ -5,6 +5,7 @@
 import { chromium, type Browser, type Page } from 'playwright';
 import { startPreviewServer, type PreviewServerHandle } from '../preview/previewServer.js';
 import { ensureAssets } from './assets.js';
+import { stopSystemTex } from './systemTex.js';
 
 export interface EngineFile {
   path: string;
@@ -51,7 +52,7 @@ const BROWSER_CLOSE_MS = 2000;
 
 /** Thrown when something asks for an engine tier after shutdown began. */
 class ShuttingDownError extends Error {
-  constructor() { super('MagicTeX is shutting down.'); this.name = 'ShuttingDownError'; }
+  constructor() { super('TeXChronicle is shutting down.'); this.name = 'ShuttingDownError'; }
 }
 
 /** Tier 1 — the local HTTP server behind the workspace, /latest.pdf and the WS
@@ -162,6 +163,10 @@ export async function shutdownEngine() {
   // Previously the handles were nulled at the END, which is the one arrangement
   // that lets an in-flight compile rebuild everything mid-teardown.
   disposed = true;
+  // First: a long latexmk tree must not outlive the status window while the
+  // slower browser/socket teardown consumes the exit budget. The kill happens
+  // before stopSystemTex's first await; it then removes this process's aux dir.
+  await stopSystemTex();
 
   // The preview server goes first. It is the fast, user-visible half — closing it
   // is what tells open windows they have gone stale — while browser.close() can

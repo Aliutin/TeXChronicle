@@ -280,7 +280,7 @@ export async function restoreSection(root: string, sectionId: string, sha: strin
     const snapshot = await createCheckpointUnlocked(root);
     if (!snapshot.created && snapshot.reason !== 'unchanged') {
       throw new Error(
-        `Refusing to restore: MagicTeX could not snapshot your current files first, so this could not be undone (${snapshot.error ?? snapshot.reason}). Nothing has been changed.`,
+        `Refusing to restore: TeXChronicle could not snapshot your current files first, so this could not be undone (${snapshot.error ?? snapshot.reason}). Nothing has been changed.`,
       );
     }
 

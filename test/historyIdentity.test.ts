@@ -8,7 +8,7 @@ import { join, dirname } from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { createCheckpoint, listCheckpoints, restoreCheckpoint } from '../src/git/checkpoints.js';
 import { historyRepo, forgetHistoryRepo } from '../src/git/historyRepo.js';
-import { cacheRoot } from '../src/engine/assetsDir.js';
+import { cacheRoot, legacyCacheRoot } from '../src/engine/assetsDir.js';
 
 // History was keyed by a hash of the project PATH, so it belonged to the path
 // rather than to the project. Rename a folder and the timeline was gone; reuse a
@@ -18,14 +18,14 @@ import { cacheRoot } from '../src/engine/assetsDir.js';
 // Every test here redirects the per-user cache into a temp dir. Two reasons: the
 // migration path reads the real one, and against the UNFIXED code these tests
 // create shadow repos full of the fixture's text — which would otherwise be left
-// in the developer's own ~/…/magictex/history forever, which is itself one of
+// in the developer's own legacy cache/history forever, which is itself one of
 // the things being fixed.
 const HOME_VARS = ['LOCALAPPDATA', 'XDG_CACHE_HOME', 'HOME'] as const;
 const saved: Record<string, string | undefined> = {};
 let fakeCache: string;
 
 before(() => {
-  fakeCache = mkdtempSync(join(tmpdir(), 'magictex-cache-'));
+  fakeCache = mkdtempSync(join(tmpdir(), 'texchronicle-cache-'));
   for (const k of HOME_VARS) { saved[k] = process.env[k]; process.env[k] = fakeCache; }
 });
 after(() => {
@@ -39,19 +39,19 @@ after(() => {
  * meaning what it means even if our own code stops agreeing.
  *
  * `realpath`, not `realpathSync` — on Windows the async one expands an 8.3 short
- * name (`C:\Users\ZOELIN~1\…` -> `C:\Users\Zoe Lin\…`) and the sync one returns
+ * name (`C:\Users\APERSON~1\…` -> `C:\Users\A Person\…`) and the sync one returns
  * it as given. Using the wrong one here produced a different hash from the same
  * directory, and the migration test failed against the working migration.
  */
 async function legacyDir(root: string): Promise<string> {
   let key = await realpath(root);
   if (process.platform === 'win32') key = key.toLowerCase();
-  return join(cacheRoot(), 'history', createHash('sha256').update(key).digest('hex').slice(0, 16));
+  return join(legacyCacheRoot(), 'history', createHash('sha256').update(key).digest('hex').slice(0, 16));
 }
 
 /** A plain (non-git) project folder — the case the shadow repo exists for. */
 function plainProject(text = 'ORIGINAL\n'): string {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'magictex-id-')));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'texchronicle-id-')));
   writeFileSync(join(root, 'main.tex'), text);
   return root;
 }
@@ -188,5 +188,5 @@ test('the shadow repo is kept out of the author\'s own commits', async () => {
   execFileSync('git', ['init', '--quiet'], { cwd: root, stdio: 'pipe' });
   const staged = execFileSync('git', ['add', '-A', '-n', '--', '.'], { cwd: root, stdio: 'pipe' }).toString();
   assert.doesNotMatch(staged, /history\.git/,
-    'the author\'s own `git add -A` would commit MagicTeX\'s shadow repository');
+    'the author\'s own `git add -A` would commit TeXChronicle\'s shadow repository');
 });

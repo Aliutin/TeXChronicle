@@ -23,6 +23,7 @@
 // ./nodeVersion.mjs is written in old syntax on purpose and pulls in nothing, so
 // static-importing it here is safe on the very Node versions being rejected.
 import { readFileSync } from 'node:fs';
+import './userInfoFallback.cjs';
 import { floorOf, isBelowFloor, tooOldMessage, exitWithMessage } from './nodeVersion.mjs';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
@@ -40,25 +41,25 @@ if (isBelowFloor(process.versions.node, range)) {
     try {
       const { installDesktopLauncher } = await import(new URL('../src/installLauncher.ts', import.meta.url).href);
       const paths = await installDesktopLauncher();
-      console.log('[MagicTeX] Installed one-click launchers:');
+      console.log('[TeXChronicle] Installed one-click launchers:');
       for (const path of paths) console.log(`  ${path}`);
-      console.log('[MagicTeX] Click MagicTeX to reopen a recent paper or browse for a new .tex file; you can also drag a .tex file onto the desktop shortcut.');
+      console.log('[TeXChronicle] Click TeXChronicle to reopen a recent paper or browse for a new .tex file; you can also drag a .tex file onto the desktop shortcut.');
     } catch (error) {
-      console.error(`[MagicTeX] ${String(error && error.message || error)}`);
+      console.error(`[TeXChronicle] ${String(error && error.message || error)}`);
       process.exitCode = 1;
     }
   } else if (command === '--help' || command === '-h') {
-    console.log(`MagicTeX — local LaTeX workspace and MCP server
+    console.log(`TeXChronicle — local LaTeX workspace and MCP server
 
 Usage:
-  magictex preview [main.tex] [options]   Open the standalone editor
-  magictex open [main.tex] [options]      Open Recent projects when omitted
-  magictex install-launcher               Add one-click shortcuts (Windows)
-  magictex-mcp                            Start the MCP server on stdio
+  texchronicle preview [main.tex] [options]   Open the standalone editor
+  texchronicle open [main.tex] [options]      Open Recent projects when omitted
+  texchronicle install-launcher               Add one-click shortcuts (Windows)
+  texchronicle                                Start the MCP server on stdio
 
-Run "magictex preview --help" for standalone options.`);
+Run "texchronicle preview --help" for standalone options.`);
   } else if (command) {
-    console.error(`Unknown command: ${command}\nRun "magictex --help" for usage.`);
+    console.error(`Unknown command: ${command}\nRun "texchronicle --help" for usage.`);
     process.exitCode = 2;
   } else {
     // No arguments remains the MCP transport entry point, preserving every

@@ -1,37 +1,25 @@
-# MagicTeX — Editor de LaTeX para agentes de IA
+# TeXChronicle — Editor de LaTeX para agentes de IA
 
 <!-- badges -->
-[![npm](https://img.shields.io/npm/v/magictex-mcp?logo=npm)](https://www.npmjs.com/package/magictex-mcp)
-[![MCP registry](https://img.shields.io/badge/MCP%20registry-io.github.ZoeLinUTS%2Fmagictex-6f42c1)](https://registry.modelcontextprotocol.io)
-[![CI](https://github.com/ZoeLinUTS/MagicTeX-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ZoeLinUTS/MagicTeX-mcp/actions/workflows/ci.yml)
-[![stars](https://img.shields.io/github/stars/ZoeLinUTS/MagicTeX-mcp?style=flat)](https://github.com/ZoeLinUTS/MagicTeX-mcp/stargazers)
-[![last commit](https://img.shields.io/github/last-commit/ZoeLinUTS/MagicTeX-mcp)](https://github.com/ZoeLinUTS/MagicTeX-mcp/commits/main)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-blue)](../../LICENSE)
-[![Sponsor](https://img.shields.io/badge/%E2%9D%A4-Sponsor-db61a2)](https://github.com/sponsors/ZoeLinUTS)
+
+> The product name is current, but this translation still contains pre-release installation details. See the [English README](../../README.md) for the current portable/source setup and publishing status.
 
 [English](../../README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · **Español** · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md)
 
-![MagicTeX workspace](../images/workspace.png)
+![TeXChronicle workspace](../images/workspace.png)
 
-**MagicTeX** es un **editor de LaTeX creado para agentes de IA**: un espacio de trabajo de
+**TeXChronicle** es un **editor de LaTeX creado para agentes de IA**: un espacio de trabajo de
 **una sola ventana** al estilo Overleaf para Claude Code, servido por un servidor MCP, **sin
 instalación local de TeX ni cuenta de Overleaf**: vista previa del PDF en vivo, un editor de
 código con **modo Visual (WYSIWYG)**, historial de cambios y **comentarios que anclas en el
 PDF renderizado y que se convierten en instrucciones de edición para el agente**. (paquete
-npm: `magictex-mcp`.)
+npm: `texchronicle`.)
 
 Compila con un motor WASM TeX Live 2026
 ([texlyre-busytex](https://github.com/TeXlyre/texlyre-busytex)) que corre dentro de un
 navegador headless, así que no hay nada de varios GB que instalar — solo una descarga única
 de recursos WASM.
-
-## Véalo antes de instalar
-
-En **[zoelin.dev/tools/magictex](https://zoelin.dev/tools/magictex)** hay un recorrido guiado
-del bucle comentario → agente, construido con salida real de la herramienta. Es una
-repetición, no una instancia alojada: el motor TeX es una descarga única de ~650 MB y la
-mitad del agente es el propio Claude, así que MagicTeX corre junto a tu proyecto, no en una
-página web.
 
 ## El espacio de trabajo
 
@@ -92,9 +80,9 @@ anotaciones ancladas de LiquidText):
 
 ## Configuración
 
-MagicTeX está en npm como [`magictex-mcp`](https://www.npmjs.com/package/magictex-mcp) y
+TeXChronicle está en npm como [`texchronicle`](https://www.npmjs.com/package/texchronicle) y
 figura en el [registro MCP oficial](https://registry.modelcontextprotocol.io) como
-**`io.github.ZoeLinUTS/magictex`**, así que cualquier cliente que lea el registro puede
+**`io.github.Aliutin/texchronicle`**, así que cualquier cliente que lea el registro puede
 encontrarlo. No hay nada que clonar ni TeX que instalar; `npx` lo descarga la primera vez.
 
 1. Añádelo al `.mcp.json` de tu proyecto (ver [`.mcp.json.example`](../../.mcp.json.example)):
@@ -102,7 +90,7 @@ encontrarlo. No hay nada que clonar ni TeX que instalar; `npx` lo descarga la pr
    ```json
    {
      "mcpServers": {
-       "magictex": { "command": "npx", "args": ["-y", "magictex-mcp"] }
+       "texchronicle": { "command": "npx", "args": ["-y", "texchronicle"] }
      }
    }
    ```
@@ -113,26 +101,26 @@ encontrarlo. No hay nada que clonar ni TeX que instalar; `npx` lo descarga la pr
    posteriores la recargan solas.
 
    Para desarrollo local desde un clon, apunta a la fuente:
-   `"command": "npx", "args": ["tsx", "/ruta/absoluta/magictex-mcp/src/server.ts"]`
+   `"command": "npx", "args": ["tsx", "/ruta/absoluta/texchronicle/src/server.ts"]`
 
 Los recursos WASM **no** están en este repositorio. Se descargan en el primer arranque a una
-caché **por usuario** — `~/Library/Caches/magictex` en macOS, `$XDG_CACHE_HOME/magictex` en
-Linux, `%LOCALAPPDATA%\magictex` en Windows — de modo que actualizar MagicTeX no vuelve a
+caché **por usuario** — `~/Library/Caches/texchronicle` en macOS, `$XDG_CACHE_HOME/texchronicle` en
+Linux, `%LOCALAPPDATA%\texchronicle` en Windows — de modo que actualizar TeXChronicle no vuelve a
 descargarlos, y un clon, una instalación global y una ejecución con `npx` comparten una sola
-copia. Usa `MAGICTEX_ASSETS_DIR` para ponerlos en otro sitio. Para precargarlos:
+copia. Usa `TEXCHRONICLE_ASSETS_DIR` para ponerlos en otro sitio. Para precargarlos:
 `npx texlyre-busytex download-assets <ese directorio>`.
 
 ## Instalar como plugin de Claude Code (comandos de barra)
 
-Para escribir menos, instala MagicTeX como plugin — una sola instalación te da el servidor MCP
+Para escribir menos, instala TeXChronicle como plugin — una sola instalación te da el servidor MCP
 **y** los comandos de barra:
 
 ```
-/plugin marketplace add ZoeLinUTS/MagicTeX-mcp
-/plugin install magictex
+/plugin marketplace add Aliutin/TeXChronicle
+/plugin install texchronicle
 ```
 
-- **`/magic-latex`** — compila y abre el espacio de trabajo.
+- **`/texchronicle`** — compila y abre el espacio de trabajo.
 - **`/ai-review [skill]`** — revisa el artículo con una skill (por defecto
   `academic-paper-revision`; admite cualquier nombre) y publica comentarios para aceptar/rechazar.
 - **`/address-comments`** — resuelve tus comentarios aceptados (`/loop 60s /address-comments`).
@@ -159,7 +147,7 @@ Cada herramienta MCP tiene también un comando con el **mismo nombre**, así que
 
 Nunca es obligatorio escribirlos: el lenguaje natural también funciona (*«renderiza una vista previa»*, *«atiende mis comentarios»*). Los comandos son solo un atajo rápido y fácil de enseñar.
 
-> El plugin trae el servidor MCP (`npx magictex-mcp`), así que instalarlo es todo lo que hace
+> El plugin trae el servidor MCP (`npx texchronicle`), así que instalarlo es todo lo que hace
 > falta — el `.mcp.json` de arriba es la alternativa si prefieres no instalar un plugin. Los
 > comandos de barra funcionan de las dos maneras.
 
@@ -177,7 +165,7 @@ La superficie MCP, para cualquier cliente que hable MCP. (En Claude Code basta c
 | `show_diff` | `checkpoint?` | Renderiza un diff en paralelo **como imagen**, mostrada en la conversación. Por defecto los cambios sin confirmar; pasa un sha de checkpoint para una versión guardada. |
 | `list_checkpoints` | `limit?` (por defecto 10, máx. 50) | Checkpoints recientes con su sha, del más nuevo — para encontrar cuál pasarle a `show_diff`. |
 
-**Lo más vistoso está construido *sobre* estas herramientas, no entre ellas.** `/magic-latex`, `/ai-review`, `/address-comments` y ⚡ `/ultra-agents` son **comandos del plugin** de Claude Code que orquestan las herramientas de arriba — `/ultra-agents` encadena revisar → aceptar automáticamente → corregir durante tantas rondas como permitas, y es la razón de que `add_comment` tenga un parámetro `accepted`. No forman parte de la superficie MCP, así que otro cliente MCP solo ve estas siete. Ver la sección del plugin más arriba y [docs/AGENT-LOOP.es.md](AGENT-LOOP.es.md).
+**Lo más vistoso está construido *sobre* estas herramientas, no entre ellas.** `/texchronicle`, `/ai-review`, `/address-comments` y ⚡ `/ultra-agents` son **comandos del plugin** de Claude Code que orquestan las herramientas de arriba — `/ultra-agents` encadena revisar → aceptar automáticamente → corregir durante tantas rondas como permitas, y es la razón de que `add_comment` tenga un parámetro `accepted`. No forman parte de la superficie MCP, así que otro cliente MCP solo ve estas siete. Ver la sección del plugin más arriba y [docs/AGENT-LOOP.es.md](AGENT-LOOP.es.md).
 
 ## Cómo se ve en la terminal
 
@@ -187,7 +175,7 @@ navegador (la captura de arriba) refleja el mismo estado en vivo.
 
 Tú escribes:
 ```
-/magic-latex
+/texchronicle
 ```
 Claude llama a `render_preview` y responde:
 ```
@@ -278,8 +266,8 @@ historial trazable.
   primer arranque, en tres conjuntos de paquetes (basic 87 MB, recommended 190 MB, extra 324 MB,
   más los 31 MB del motor). Un paper normal solo *carga* el conjunto basic; los otros dos se
   quedan en disco hasta que algo los necesite. La caché es por usuario, no por instalación, así
-  que actualizar MagicTeX no vuelve a descargarlos. Cambia la ubicación con
-  `MAGICTEX_ASSETS_DIR`.
+  que actualizar TeXChronicle no vuelve a descargarlos. Cambia la ubicación con
+  `TEXCHRONICLE_ASSETS_DIR`.
 - **Una distribución de TeX local es opcional.** Abajo, cuándo importa.
 
 ### ¿Necesito una distribución de TeX local?
@@ -290,7 +278,7 @@ clases de congresos y varios paquetes menos comunes. Si falta alguno se te
 avisa, en lugar de entregarte un PDF silenciosamente incorrecto.
 
 Instala una distribución cuando quieras una salida idéntica a la de Overleaf.
-MagicTeX la detecta solo, sin configuración:
+TeXChronicle la detecta solo, sin configuración:
 
 | | |
 |---|---|
@@ -298,7 +286,7 @@ MagicTeX la detecta solo, sin configuración:
 | Linux | `texlive-full` |
 | Windows | [TeX Live](https://tug.org/texlive/), or [MiKTeX](https://miktex.org/) **plus** [Strawberry Perl](https://strawberryperl.com/) |
 
-> `latexmk` es lo que MagicTeX busca en el `PATH`, pero no se instala por
+> `latexmk` es lo que TeXChronicle busca en el `PATH`, pero no se instala por
 > separado: es un script incluido en las distribuciones anteriores. Comprueba con
 > **`latexmk -version`**, no con `which latexmk`: `latexmk` es un script de
 > Perl, y MiKTeX pone `latexmk.exe` en el `PATH` sin incluir un Perl que lo
@@ -352,20 +340,11 @@ comentarios ni el historial de checkpoints (ver [`ROADMAP.es.md`](ROADMAP.es.md)
 multi-agente realmente paralela (revisor/autor/defensor en sus propias ramas git, fusionadas
 después) es el siguiente hito.
 
-## Patrocina este proyecto
-
-MagicTeX es libre y de código abierto (AGPL-3.0). Si te ahorra tiempo con tus artículos,
-considera **[patrocinar el proyecto](https://github.com/sponsors/ZoeLinUTS)**. Una ⭐ en el
-repositorio también ayuda.
-
 ## Agradecimientos
 
-MagicTeX está escrito y mantenido por [Zoe Lin](https://zoelin.dev), construido con **[Claude Code](https://claude.com/claude-code)**.
+TeXChronicle began as a fork of [MagicTeX MCP](https://github.com/ZoeLinUTS/MagicTeX-mcp) by Zoe Lin and contributors, and has since been substantially redesigned around human-first editing and section-level history. See [NOTICE.md](../../NOTICE.md) for provenance.
 
-Gracias a **David Turnbull**, que me contó la historia de Knuth dedicando diez años a
-construir su propio tipógrafo en lugar de aceptar cómo se veía su libro — la historia
-con la que este proyecto sigue discutiendo. Y a quienes mantienen [`texlyre-busytex`](https://github.com/TeXlyre/texlyre-busytex), sin cuyo
-TeX Live en WASM nada de esto funcionaría localmente.
+Thanks also to the maintainers of [texlyre-busytex](https://github.com/TeXlyre/texlyre-busytex), whose WASM TeX Live engine powers the bundled compiler.
 
 ## Licencia
 

@@ -29,7 +29,7 @@ import { createCheckpoint, listCheckpoints, restoreFile } from '../src/git/check
 const lines = (s: string) => s.split('\r\n').join('\n');
 
 function repo() {
-  const root = mkdtempSync(join(tmpdir(), 'magictex-pathspec-'));
+  const root = mkdtempSync(join(tmpdir(), 'texchronicle-pathspec-'));
   const git = (...args: string[]) => execFileSync('git', args, { cwd: root, stdio: 'pipe' });
   git('init', '-q');
   git('config', 'user.email', 't@example.com');

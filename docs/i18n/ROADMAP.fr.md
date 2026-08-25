@@ -2,9 +2,9 @@
 
 [English](../ROADMAP.md) · [简体中文](ROADMAP.zh-CN.md) · [日本語](ROADMAP.ja.md) · [한국어](ROADMAP.ko.md) · [Español](ROADMAP.es.md) · **Français** · [Deutsch](ROADMAP.de.md) · [Português](ROADMAP.pt.md)
 
-## Livré : usage concurrent sûr de l'état propre à MagicTeX
+## Livré : usage concurrent sûr de l'état propre à TeXChronicle
 
-Chaque session Claude Code qui se connecte au serveur MCP `magictex` d'un projet lance son **propre processus séparé** (MCP en stdio = un processus enfant par client) — donc deux sessions travaillant sur le même article ne partagent aucun état en mémoire. Rien n'empêchait les deux de se disputer les mêmes fichiers sur disque.
+Chaque session Claude Code qui se connecte au serveur MCP `texchronicle` d'un projet lance son **propre processus séparé** (MCP en stdio = un processus enfant par client) — donc deux sessions travaillant sur le même article ne partagent aucun état en mémoire. Rien n'empêchait les deux de se disputer les mêmes fichiers sur disque.
 
 - **Verrou inter-processus** (`src/lock.ts`) — un fichier de verrou exclusif à `.latex-preview/.lock`, acquis par création atomique (`O_EXCL`), avec récupération en cas de verrou obsolète (un PID propriétaire mort, ou un verrou vieux de plus de 30s, est nettoyé automatiquement, pour qu'un agent planté ne puisse pas bloquer les autres indéfiniment).
 - **Ce qui est protégé** : `add_comment` / `resolve_comment` / `reply_to_comment` / rejeter-et-supprimer (tous les mutateurs de `commentsStore.ts`) et la création/restauration de checkpoints (`createCheckpoint`, `restoreCheckpoint`, `restoreFile`) — chacun exécute maintenant son cycle complet lire-modifier-écrire comme une seule section critique inter-processus, au lieu de lire → modifier → écrire sans exclusion.

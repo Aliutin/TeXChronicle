@@ -4,7 +4,7 @@ argument-hint: [skill-name]
 ---
 
 Review the current paper and leave targeted comments I can accept or reject in the
-MagicTeX workspace.
+TeXChronicle workspace.
 
 The review skill to use is: **$ARGUMENTS** — if that is empty, default to
 `academic-paper-revision`.
@@ -12,9 +12,8 @@ The review skill to use is: **$ARGUMENTS** — if that is empty, default to
 Do this:
 
 1. **Check the skill is available.** If the named skill is not installed/available
-   to you, STOP and tell me its name and where to get it (for
-   `academic-paper-revision`, that is https://github.com/ZoeLinUTS/Academic-paper-revision).
-   Do not continue until it's available.
+   to you, STOP and tell me its name and how to install it with the current
+   agent's skill manager. Do not continue until it's available.
    - If I didn't name one in **$ARGUMENTS**, mention before you start that I can
      point this at any other installed skill next time with `/ai-review <skill-name>`
      (e.g. a venue-specific or house-style review skill) — one line, not a detour.

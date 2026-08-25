@@ -1,14 +1,14 @@
-# MagicTeX — Guia do usuário
+# TeXChronicle — Guia do usuário
 
 [English](../USER-GUIDE.md) · [简体中文](USER-GUIDE.zh-CN.md) · [日本語](USER-GUIDE.ja.md) · [한국어](USER-GUIDE.ko.md) · [Español](USER-GUIDE.es.md) · [Français](USER-GUIDE.fr.md) · [Deutsch](USER-GUIDE.de.md) · **Português**
 
-![O espaço de trabalho do MagicTeX](../images/workspace.png)
+![O espaço de trabalho do TeXChronicle](../images/workspace.png)
 
 ## Uso no dia a dia
 
 1. Adicione o servidor ao `.mcp.json` do seu projeto (veja o README) e reinicie o Claude Code.
    Ou instale o plugin para os comandos de barra (abaixo).
-2. Peça ao Claude *"render a preview"* (ou rode `/magic-latex`). O **espaço de trabalho** abre:
+2. Peça ao Claude *"render a preview"* (ou rode `/texchronicle`). O **espaço de trabalho** abre:
    **árvore de arquivos + editor de código** à esquerda, o **PDF ao vivo** no centro e **Comments**
    à direita (alterna com o botão 💬 **Comments** na barra superior).
 3. Daí em diante o PDF fica ao vivo. Os salvamentos do seu próprio editor e as edições do Claude
@@ -17,10 +17,10 @@
 
 ## Comandos de barra (plugin)
 
-Instale uma vez — `/plugin marketplace add ZoeLinUTS/MagicTeX-mcp` e depois
-`/plugin install magictex` — e conduza tudo digitando o mínimo:
+Instale uma vez — `/plugin marketplace add Aliutin/TeXChronicle` e depois
+`/plugin install texchronicle` — e conduza tudo digitando o mínimo:
 
-- **`/magic-latex`** — compila e abre o espaço de trabalho.
+- **`/texchronicle`** — compila e abre o espaço de trabalho.
 - **`/ai-review [skill]`** — revisa o artigo com uma skill (padrão `academic-paper-revision`;
   qualquer nome serve) e publica comentários para você aceitar.
 - **`/address-comments`** — resolve seus comentários aceitos (em laço: `/loop 60s /address-comments`).
@@ -85,7 +85,7 @@ Os destaques são desenhados a partir da *camada de texto* invisível do pdf.js 
 para seleção), que é uma aproximação por linha de onde os glifos são pintados no canvas — então uma
 caixa pode ficar um fio de cabelo fora, mais visível com zoom. Esse pequeno deslocamento é inerente e
 cosmético. Para evitar o desvio maior que acontecia depois que o Claude editava um trecho e o PDF
-refluía, o MagicTeX **reancora cada destaque no texto atual** a cada recompilação (casando as frases
+refluía, o TeXChronicle **reancora cada destaque no texto atual** a cada recompilação (casando as frases
 inicial e final da citação do comentário) em vez de fixá-lo em coordenadas antigas — assim ele
 acompanha o texto mesmo quando as palavras do meio mudaram. Se um trecho for apagado ou reescrito
 além do reconhecível, o destaque volta para sua última posição conhecida.
@@ -173,6 +173,6 @@ pré-visualização local é uma aproximação.
   compilação final no seu destino (Overleaf ou seu sistema de submissão).
 - O histórico de mudanças fica numa ref oculta do git (`refs/latex-preview/checkpoints`) e nunca toca
   seus branches, seu `git log` ou sua árvore de trabalho. Se a pasta não for um repositório git,
-  o MagicTeX guarda essa ref num repositório próprio em `.latex-preview/history.git` dentro do
+  o TeXChronicle guarda essa ref num repositório próprio em `.latex-preview/history.git` dentro do
   projeto — o histórico se move, se copia e é apagado junto com a pasta, e `git` rodado ali
   continua dizendo que não há repositório.

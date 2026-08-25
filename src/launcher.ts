@@ -1,11 +1,12 @@
-// Human-facing launch helpers. `magictex open` uses the operating system's
+// Human-facing launch helpers. `texchronicle open` uses the operating system's
 // file picker when no path was supplied, while drag-and-drop / "Open with"
 // hands us an absolute .tex path. Keeping path resolution here makes the GUI
 // and terminal entry points follow exactly the same project-root rules.
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { recentProjectsPath } from './recentProjects.js';
+import { access, realpath, stat } from 'node:fs/promises';
+import { listRecentProjects, recentProjectsPath } from './recentProjects.js';
 
 const run = promisify(execFile);
 
@@ -13,36 +14,42 @@ export interface PickerPlan {
   command: string;
   args: string[];
   env?: NodeJS.ProcessEnv;
+  /** Interactive Windows forms must not inherit SW_HIDE from child_process. */
+  windowsHide?: boolean;
 }
 
 const WINDOWS_PICKER = String.raw`
 $ErrorActionPreference = 'Stop'
+$utf8 = [System.Text.UTF8Encoding]::new($false)
 Add-Type -AssemblyName System.Windows.Forms
 $dialog = New-Object System.Windows.Forms.OpenFileDialog
 $dialog.Title = 'Choose the main LaTeX file'
 $dialog.Filter = 'LaTeX files (*.tex)|*.tex|All files (*.*)|*.*'
 $dialog.CheckFileExists = $true
 $dialog.Multiselect = $false
-if ($env:MAGICTEX_PICKER_DIR -and (Test-Path -LiteralPath $env:MAGICTEX_PICKER_DIR)) {
-  $dialog.InitialDirectory = $env:MAGICTEX_PICKER_DIR
+if ($env:TEXCHRONICLE_PICKER_DIR -and (Test-Path -LiteralPath $env:TEXCHRONICLE_PICKER_DIR)) {
+  $dialog.InitialDirectory = $env:TEXCHRONICLE_PICKER_DIR
 }
 if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-  [Console]::Out.Write($dialog.FileName)
+  $bytes = $utf8.GetBytes($dialog.FileName)
+  [Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)
 }`;
 
 const WINDOWS_RECENT_PROJECTS = String.raw`
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+$utf8 = [System.Text.UTF8Encoding]::new($false)
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = 'MagicTeX — Recent projects'
+$form.Text = 'TeXChronicle — Recent projects'
 $form.StartPosition = 'CenterScreen'
 $form.ClientSize = New-Object System.Drawing.Size(820, 445)
 $form.MinimumSize = New-Object System.Drawing.Size(700, 400)
 $form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
 $form.AutoScaleMode = 'Dpi'
+$form.TopMost = $true
 
 $heading = New-Object System.Windows.Forms.Label
 $heading.Text = 'Open a LaTeX project'
@@ -63,6 +70,7 @@ $list.View = 'Details'
 $list.FullRowSelect = $true
 $list.HideSelection = $false
 $list.MultiSelect = $false
+$list.AccessibleName = 'Recent LaTeX projects'
 $list.Location = New-Object System.Drawing.Point(20, 78)
 $list.Size = New-Object System.Drawing.Size(780, 305)
 $list.Anchor = 'Top,Bottom,Left,Right'
@@ -74,8 +82,8 @@ $form.Controls.Add($list)
 
 $records = @()
 try {
-  if (Test-Path -LiteralPath $env:MAGICTEX_RECENTS_FILE -PathType Leaf) {
-    $records = @(Get-Content -Raw -LiteralPath $env:MAGICTEX_RECENTS_FILE | ConvertFrom-Json)
+  if (Test-Path -LiteralPath $env:TEXCHRONICLE_RECENTS_FILE -PathType Leaf) {
+    $records = @(Get-Content -Raw -Encoding UTF8 -LiteralPath $env:TEXCHRONICLE_RECENTS_FILE | ConvertFrom-Json)
   }
 } catch { $records = @() }
 
@@ -123,6 +131,7 @@ $openSelected = {
   $script:choice = [PSCustomObject]@{
     projectRoot = [string]$recent.projectRoot
     mainFile = [string]$recent.mainFile
+    remembered = $true
   }
   $form.Close()
 }
@@ -135,13 +144,29 @@ $browseButton.Add_Click({
   $dialog.Filter = 'LaTeX files (*.tex)|*.tex|All files (*.*)|*.*'
   $dialog.CheckFileExists = $true
   $dialog.Multiselect = $false
-  if ($env:MAGICTEX_PICKER_DIR -and (Test-Path -LiteralPath $env:MAGICTEX_PICKER_DIR)) {
-    $dialog.InitialDirectory = $env:MAGICTEX_PICKER_DIR
+  if ($env:TEXCHRONICLE_PICKER_DIR -and (Test-Path -LiteralPath $env:TEXCHRONICLE_PICKER_DIR)) {
+    $dialog.InitialDirectory = $env:TEXCHRONICLE_PICKER_DIR
   }
   if ($dialog.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) {
-    $script:choice = [PSCustomObject]@{
-      projectRoot = Split-Path -Parent $dialog.FileName
-      mainFile = Split-Path -Leaf $dialog.FileName
+    $chosen = [System.IO.Path]::GetFullPath($dialog.FileName)
+    $known = $records | Where-Object {
+      try {
+        $candidate = [System.IO.Path]::GetFullPath((Join-Path ([string]$_.projectRoot) ([string]$_.mainFile)))
+        [System.StringComparer]::OrdinalIgnoreCase.Equals($candidate, $chosen)
+      } catch { $false }
+    } | Select-Object -First 1
+    if ($known) {
+      $script:choice = [PSCustomObject]@{
+        projectRoot = [string]$known.projectRoot
+        mainFile = [string]$known.mainFile
+        remembered = $true
+      }
+    } else {
+      $script:choice = [PSCustomObject]@{
+        projectRoot = Split-Path -Parent $chosen
+        mainFile = Split-Path -Leaf $chosen
+        remembered = $false
+      }
     }
     $form.Close()
   }
@@ -151,7 +176,7 @@ $form.AcceptButton = $openButton
 $form.CancelButton = $cancelButton
 $form.Add_Shown({ $form.Activate(); if ($list.Items.Count -gt 0) { $list.Items[0].Selected = $true; $list.Focus() } })
 
-if ($env:MAGICTEX_PICKER_AUTOCLOSE -eq '1') {
+if ($env:TEXCHRONICLE_PICKER_AUTOCLOSE -eq '1') {
   $timer = New-Object System.Windows.Forms.Timer
   $timer.Interval = 100
   $timer.Add_Tick({ $timer.Stop(); $form.Close() })
@@ -159,7 +184,8 @@ if ($env:MAGICTEX_PICKER_AUTOCLOSE -eq '1') {
 }
 [void]$form.ShowDialog()
 if ($script:choice) {
-  [Console]::Out.Write(($script:choice | ConvertTo-Json -Compress))
+  $bytes = $utf8.GetBytes(($script:choice | ConvertTo-Json -Compress))
+  [Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)
 }`;
 
 /** Commands are exported so the platform-specific quoting can be tested
@@ -170,7 +196,8 @@ export function pickerPlans(platform: NodeJS.Platform, initialDirectory: string)
     return [{
       command: join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
       args: ['-NoProfile', '-STA', '-Command', WINDOWS_PICKER],
-      env: { ...process.env, MAGICTEX_PICKER_DIR: resolve(initialDirectory) },
+      env: { ...process.env, TEXCHRONICLE_PICKER_DIR: resolve(initialDirectory) },
+      windowsHide: false,
     }];
   }
   if (platform === 'darwin') {
@@ -201,9 +228,10 @@ export function recentProjectsPickerPlan(
     args: ['-NoProfile', '-STA', '-Command', WINDOWS_RECENT_PROJECTS],
     env: {
       ...process.env,
-      MAGICTEX_PICKER_DIR: resolve(initialDirectory),
-      MAGICTEX_RECENTS_FILE: recentsFile,
+      TEXCHRONICLE_PICKER_DIR: resolve(initialDirectory),
+      TEXCHRONICLE_RECENTS_FILE: recentsFile,
     },
+    windowsHide: false,
   };
 }
 
@@ -214,7 +242,7 @@ export async function chooseMainTex(initialDirectory = process.cwd()): Promise<s
     try {
       const { stdout } = await run(plan.command, plan.args, {
         env: plan.env,
-        windowsHide: true,
+        windowsHide: plan.windowsHide,
         maxBuffer: 1024 * 1024,
       });
       const selected = stdout.trim();
@@ -232,34 +260,100 @@ export async function chooseMainTex(initialDirectory = process.cwd()): Promise<s
   }
   throw new Error(
     `No graphical file picker is installed (${String((unavailable as Error)?.message ?? unavailable)}). ` +
-    'Install zenity or kdialog, or run magictex preview from the project directory.',
+    'Install zenity or kdialog, or run texchronicle preview from the project directory.',
   );
 }
 
 export interface LaunchTarget { projectRoot: string; mainFile?: string }
+
+const PROJECT_MARKERS = ['.latex-preview', '.git', '.texchronicle.json', '.magictex.json', 'latexmkrc', '.latexmkrc'];
+
+async function exists(path: string): Promise<boolean> {
+  try { await access(path); return true; } catch { return false; }
+}
+
+async function realMainPath(path: string): Promise<string> {
+  try { return await realpath(path); }
+  catch (error) {
+    if (/\.tex$/i.test(path)) throw error;
+    return realpath(`${path}.tex`);
+  }
+}
+
+const pathKey = (path: string): string => {
+  const normalized = resolve(path).replace(/[\\/]+$/, '');
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+};
+
+/** Resolve filesystem aliases before trusting containment. Lexical relative()
+ * alone can be bypassed by a junction/symlink inside the selected root. */
+export async function canonicalizeLaunchTarget(target: LaunchTarget): Promise<LaunchTarget> {
+  const projectRoot = await realpath(target.projectRoot);
+  const rootInfo = await stat(projectRoot);
+  if (!rootInfo.isDirectory()) throw new Error(`Project directory does not exist: ${target.projectRoot}`);
+  if (!target.mainFile) return { projectRoot };
+
+  const mainPath = await realMainPath(resolve(projectRoot, target.mainFile));
+  const mainInfo = await stat(mainPath);
+  if (!mainInfo.isFile()) throw new Error(`The main file is not a regular file: ${target.mainFile}`);
+  const mainFile = relative(projectRoot, mainPath).replace(/\\/g, '/');
+  if (!mainFile || mainFile === '..' || mainFile.startsWith('../') || isAbsolute(mainFile)) {
+    throw new Error('The main file must stay inside the real project root (symlinks and junctions included).');
+  }
+  if (!/\.tex$/i.test(mainFile)) throw new Error(`The main file must be a .tex file: ${target.mainFile}`);
+  return { projectRoot, mainFile };
+}
+
+/** Reuse an established root for a known main file; otherwise walk upward for
+ * a project marker. This prevents browsing to paper/src/main.tex from silently
+ * creating a second history rooted at paper/src. */
+export async function inferLaunchTarget(initialDirectory: string, selectedMain: string): Promise<LaunchTarget> {
+  const mainPath = await realMainPath(resolve(selectedMain));
+  const mainKey = pathKey(mainPath);
+  for (const recent of await listRecentProjects().catch(() => [])) {
+    const candidate = await realpath(resolve(recent.projectRoot, recent.mainFile)).catch(() => '');
+    if (candidate && pathKey(candidate) === mainKey) return canonicalizeLaunchTarget(recent);
+  }
+
+  let projectRoot = dirname(mainPath);
+  let probe = projectRoot;
+  for (let depth = 0; depth < 12; depth++) {
+    if ((await Promise.all(PROJECT_MARKERS.map((marker) => exists(join(probe, marker))))).some(Boolean)) {
+      projectRoot = probe;
+      break;
+    }
+    const parent = dirname(probe);
+    if (parent === probe) break;
+    probe = parent;
+  }
+  return canonicalizeLaunchTarget(resolveLaunchTarget(initialDirectory, projectRoot, mainPath));
+}
 
 /** Desktop entry point. Windows gets a real recent-projects window; other
  * platforms retain their native file chooser until equivalent launchers land. */
 export async function chooseLaunchTarget(initialDirectory = process.cwd()): Promise<LaunchTarget | null> {
   if (process.platform !== 'win32') {
     const selected = await chooseMainTex(initialDirectory);
-    return selected ? resolveLaunchTarget(initialDirectory, undefined, selected) : null;
+    return selected ? inferLaunchTarget(initialDirectory, selected) : null;
   }
   const plan = recentProjectsPickerPlan(initialDirectory);
   const { stdout } = await run(plan.command, plan.args, {
     env: plan.env,
-    windowsHide: true,
+    windowsHide: plan.windowsHide,
     maxBuffer: 1024 * 1024,
   });
   const output = stdout.trim();
   if (!output) return null;
-  let selected: { projectRoot?: unknown; mainFile?: unknown };
+  let selected: { projectRoot?: unknown; mainFile?: unknown; remembered?: unknown };
   try { selected = JSON.parse(output) as typeof selected; }
   catch { throw new Error(`The project chooser returned an invalid selection: ${output.slice(0, 200)}`); }
   if (typeof selected.projectRoot !== 'string' || typeof selected.mainFile !== 'string') {
     throw new Error('The project chooser did not return a project root and main .tex file.');
   }
-  return resolveLaunchTarget(initialDirectory, selected.projectRoot, selected.mainFile);
+  const target = resolveLaunchTarget(initialDirectory, selected.projectRoot, selected.mainFile);
+  return selected.remembered === true
+    ? canonicalizeLaunchTarget(target)
+    : inferLaunchTarget(initialDirectory, resolve(target.projectRoot, target.mainFile!));
 }
 
 /** Resolve a terminal path, picker result, dropped file, or "Open with" path. */

@@ -101,7 +101,7 @@ export function HistoryPanel({
           sha: checkpoint.sha,
           title: 'Whole-project checkpoint',
           subtitle: fmt(checkpoint.time),
-          hasPdf: false,
+          hasPdf: checkpoint.hasPdf,
         };
       }
     }

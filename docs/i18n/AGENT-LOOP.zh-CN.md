@@ -59,8 +59,8 @@ If there are no accepted comments, do nothing this pass.
    `add_comment(quote, comment)`,落地成一条**建议**(PDF 上的紫色虚线高亮,Comments 面板里 *Suggested* 分区的一张卡片):
 
    ```
-   Review my paper using my academic-paper-revision skill
-   (github.com/ZoeLinUTS/Academic-paper-revision). For each issue, call add_comment
+   Review my paper using my installed academic-review skill.
+   For each issue, call add_comment
    with the exact quoted passage and your comment. Don't edit the source yet.
    ```
 
@@ -81,7 +81,7 @@ If there are no accepted comments, do nothing this pass.
 ## Ultra-agents ⚡
 
 > [!CAUTION]
-> 这是 MagicTeX 最强大的命令,也是监督最少的——按设计,轮与轮之间不经过你的确认。
+> 这是 TeXChronicle 最强大的命令,也是监督最少的——按设计,轮与轮之间不经过你的确认。
 > 在用较大的 `depth` 运行之前,请先读完这一整节。
 
 `/ultra-agents [skill] [depth]` 把第 2 步里那道人工把关**彻底去掉**——reviewer

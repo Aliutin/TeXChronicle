@@ -1,4 +1,4 @@
-# Contributing to MagicTeX
+# Contributing to TeXChronicle
 
 Thanks for wanting to help. This project is maintained by one person, so the
 process below exists to keep review load sane — not to be bureaucratic.
@@ -7,7 +7,7 @@ process below exists to keep review load sane — not to be bureaucratic.
 
 **Please open an issue before you open a pull request**, and wait for a reply.
 
-This isn't a formality. MagicTeX has a few load-bearing design decisions that
+This isn't a formality. TeXChronicle has a few load-bearing design decisions that
 aren't obvious from the code (why the compile engine lives in a hidden headless
 browser, why checkpoints go to a hidden git ref instead of your branches, why
 the UI can't run an AI review itself). A PR that cuts against one of those is a
@@ -58,5 +58,5 @@ welcome and don't need an issue first.
 
 ## Licence
 
-MagicTeX is AGPL-3.0-or-later. By contributing you agree your contribution is
+TeXChronicle is AGPL-3.0-or-later. By contributing you agree your contribution is
 licensed under the same terms.

@@ -31,7 +31,7 @@ if (!existsSync(SOURCE)) fail(`no such project: ${SOURCE}`);
 
 // Copy the sample out of the repo: compiling writes artifacts and (in a git
 // repo) checkpoints, and the smoke test shouldn't leave either behind.
-const proj = mkdtempSync(join(tmpdir(), 'magictex-smoke-'));
+const proj = mkdtempSync(join(tmpdir(), 'texchronicle-smoke-'));
 cpSync(SOURCE, proj, { recursive: true });
 
 const started = Date.now();

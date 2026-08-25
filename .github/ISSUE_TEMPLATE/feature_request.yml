@@ -1,5 +1,5 @@
 name: Feature request
-description: Suggest something MagicTeX should be able to do
+description: Suggest something TeXChronicle should be able to do
 labels: ["enhancement"]
 body:
   - type: markdown
@@ -8,7 +8,7 @@ body:
         Worth knowing before you write: the workspace UI has **no agent in it**.
         MCP tools run Claude→server only, so the browser can't make Claude do
         anything — "add a button that runs an AI review" can't work as stated.
-        See [ARCHITECTURE.md](https://github.com/ZoeLinUTS/MagicTeX-mcp/blob/main/docs/ARCHITECTURE.md).
+        See [ARCHITECTURE.md](https://github.com/Aliutin/TeXChronicle/blob/main/docs/ARCHITECTURE.md).
 
   - type: textarea
     id: problem

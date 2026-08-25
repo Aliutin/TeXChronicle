@@ -27,7 +27,7 @@ const doc = (body) => [
   '',
 ].join('\n');
 
-const proj = mkdtempSync(join(tmpdir(), 'magictex-nogit-'));
+const proj = mkdtempSync(join(tmpdir(), 'texchronicle-nogit-'));
 const tex = join(proj, 'main.tex');
 writeFileSync(tex, doc('First version.'));
 
@@ -73,7 +73,7 @@ await client.close();
 // Every git call site was rewritten to thread a per-project environment, so the
 // path that already worked needs proving too — a fix for the missing case that
 // broke the working one would be a poor trade.
-const repo = mkdtempSync(join(tmpdir(), 'magictex-gitrepo-'));
+const repo = mkdtempSync(join(tmpdir(), 'texchronicle-gitrepo-'));
 await pexec('git', ['init', '--quiet'], { cwd: repo });
 await pexec('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
 await pexec('git', ['config', 'user.name', 'Test'], { cwd: repo });
@@ -115,7 +115,7 @@ console.log(`status: ${JSON.stringify(status2)} · checkpoints: ${Array.isArray(
 // Verified by running the server with git stripped from PATH. The "once" part
 // matters as much as the message: repeated every compile it becomes noise, and
 // noise is what teaches people to skim past the notes that do matter.
-const gitless = mkdtempSync(join(tmpdir(), 'magictex-gitless-'));
+const gitless = mkdtempSync(join(tmpdir(), 'texchronicle-gitless-'));
 writeFileSync(join(gitless, 'main.tex'), doc('No git here.'));
 // Hide git without dismantling the machine. Filtering it out of PATH works on
 // Windows but is fatal on macOS, where git lives in /usr/bin alongside
@@ -127,7 +127,7 @@ function gitlessEnv() {
     const keep = (process.env.PATH ?? '').split(';').filter((p) => p && !/git|mingw/i.test(p));
     return { ...process.env, PATH: keep.join(';'), Path: keep.join(';') };
   }
-  const shim = mkdtempSync(join(tmpdir(), 'magictex-nogit-shim-'));
+  const shim = mkdtempSync(join(tmpdir(), 'texchronicle-nogit-shim-'));
   writeFileSync(join(shim, 'git'), '#!/bin/sh\nexit 127\n', { mode: 0o755 });
   return { ...process.env, PATH: `${shim}:${process.env.PATH ?? ''}` };
 }

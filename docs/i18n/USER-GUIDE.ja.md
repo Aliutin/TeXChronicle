@@ -1,14 +1,14 @@
-# MagicTeX —— ユーザーガイド
+# TeXChronicle —— ユーザーガイド
 
 [English](../USER-GUIDE.md) · [简体中文](USER-GUIDE.zh-CN.md) · **日本語** · [한국어](USER-GUIDE.ko.md) · [Español](USER-GUIDE.es.md) · [Français](USER-GUIDE.fr.md) · [Deutsch](USER-GUIDE.de.md) · [Português](USER-GUIDE.pt.md)
 
-![MagicTeX ワークスペース](../images/workspace.png)
+![TeXChronicle ワークスペース](../images/workspace.png)
 
 ## 日常の使い方
 
 1. 論文プロジェクトの `.mcp.json` にサーバーを追加し(README 参照)、Claude Code を再起動します。
    またはプラグインを入れてスラッシュコマンドを使います(下記)。
-2. Claude に *「render a preview」* と頼む(または `/magic-latex` を実行)。**ワークスペース**が
+2. Claude に *「render a preview」* と頼む(または `/texchronicle` を実行)。**ワークスペース**が
    開きます:左に**ファイルツリー＋ソースエディタ**、中央に**ライブ PDF**、右に **Comments**
    (上部バーの 💬 **Comments** ボタンで切替)。
 3. 以降、PDF はライブのままです。あなた自身のエディタでの保存も Claude の編集も自動で再コンパイル
@@ -17,10 +17,10 @@
 
 ## スラッシュコマンド(プラグイン)
 
-一度インストールすれば —— `/plugin marketplace add ZoeLinUTS/MagicTeX-mcp` のあと
-`/plugin install magictex` —— 最小限のタイピングで操作できます:
+一度インストールすれば —— `/plugin marketplace add Aliutin/TeXChronicle` のあと
+`/plugin install texchronicle` —— 最小限のタイピングで操作できます:
 
-- **`/magic-latex`** —— コンパイルしてワークスペースを開く。
+- **`/texchronicle`** —— コンパイルしてワークスペースを開く。
 - **`/ai-review [skill]`** —— スキルで論文を査読(既定は `academic-paper-revision`、任意のスキル名も可)し、
   承認用のコメントを投稿。
 - **`/address-comments`** —— 承認済みコメントを解決(ループ化:`/loop 60s /address-comments`)。
@@ -82,7 +82,7 @@ agent にコメントを*提起*させつつ、自分もループに残ること
 ハイライトは pdf.js の見えない*テキストレイヤー*(選択に使われるのと同じ幾何情報)から描かれます。
 これはキャンバス上でグリフが実際に描画される位置を行単位で近似したものなので、枠がわずかにずれることが
 あり、拡大するとより目立ちます。この小さなズレは本質的なもので、見た目だけの問題です。Claude が段落を
-編集して PDF が再フローした後に起きていた大きなズレを避けるため、MagicTeX は**再コンパイルのたびに
+編集して PDF が再フローした後に起きていた大きなズレを避けるため、TeXChronicle は**再コンパイルのたびに
 ハイライトを現在のテキストへ再アンカー**します(コメントの引用の先頭と末尾のフレーズを照合)。
 古い座標に固定するのではないので、途中の語が変わってもテキストに追随します。段落が削除されたり
 原型をとどめないほど書き換えられた場合は、最後に分かっていた位置にフォールバックします。
@@ -166,6 +166,6 @@ Overleaf での最終コンパイルは本物のパッケージを使います �
   一致する保証はありません。大多数の論文では十分正確ですが、最終的には必ず提出先(Overleaf や
   投稿システム)で最終コンパイルを行ってください。
 - 変更履歴は隠し git ref(`refs/latex-preview/checkpoints`)に保存され、あなたのブランチ、`git log`、
-  作業ツリーには一切触れません。フォルダが git リポジトリでない場合、MagicTeX はその ref を
+  作業ツリーには一切触れません。フォルダが git リポジトリでない場合、TeXChronicle はその ref を
   プロジェクト内の `.latex-preview/history.git` にある自前のリポジトリで保持します——履歴は
   フォルダと一緒に移動・コピー・削除され、そこで `git` を実行しても「リポジトリではない」ままです。

@@ -17,12 +17,12 @@ const requireFrom = createRequire(import.meta.url);
  * to reach `npx.cmd`. But with `shell: true` Node does not pass an argv — it
  * joins the arguments with spaces into one command line and hands that to the
  * shell, without quoting any of them. The destination is
- * `%LOCALAPPDATA%\magictex`, so for anyone whose Windows account name has a
+ * a per-user cache, so for anyone whose Windows account name has a
  * space in it the child saw:
  *
- *   ["download-assets", "C:\\Users\\Zoe", "Lin\\AppData\\Local\\magictex"]
+ *   ["download-assets", "C:\\Users\\A", "User\\AppData\\Local\\texchronicle"]
  *
- * and the 480 MB first-run download went to `C:\Users\Zoe` — or failed. Every
+ * and the 480 MB first-run download went to `C:\Users\A` — or failed. Every
  * such user hit it on their very first compile, which is the worst possible
  * moment for the tool to look broken.
  *
@@ -49,7 +49,7 @@ export async function ensureAssets(): Promise<void> {
   const dest = busytexDownloadDest();
   await mkdir(dest, { recursive: true });
 
-  console.error(`[magictex-mcp] First run: downloading TeX Live WASM assets (~480 MB, one time) into ${busytexDir()}. This can take a few minutes…`);
+  console.error(`[texchronicle] First run: downloading TeX Live WASM assets (~480 MB, one time) into ${busytexDir()}. This can take a few minutes…`);
   await new Promise<void>((resolve, reject) => {
     const { command, args } = downloadCommand(dest);
     const child = spawn(command, args, { stdio: ['ignore', 'inherit', 'inherit'] });
@@ -60,5 +60,5 @@ export async function ensureAssets(): Promise<void> {
   if (!busytexPresent()) {
     throw new Error(`Assets download finished but busytex.wasm is still missing from ${busytexDir()}. Run manually: npx texlyre-busytex download-assets "${dest}"`);
   }
-  console.error('[magictex-mcp] Assets ready.');
+  console.error('[texchronicle] Assets ready.');
 }

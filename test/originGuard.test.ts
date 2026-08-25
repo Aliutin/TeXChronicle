@@ -36,7 +36,7 @@ function rawGet(port: number, path: string, headers: Record<string, string>) {
 }
 
 async function server() {
-  const root = mkdtempSync(join(tmpdir(), 'magictex-origin-'));
+  const root = mkdtempSync(join(tmpdir(), 'texchronicle-origin-'));
   writeFileSync(join(root, 'main.tex'), '\\documentclass{article}\\begin{document}x\\end{document}\n');
   writeFileSync(join(root, 'generated-table.tex'), String.raw`\begin{tabular}{lc}Name & Value \\ \end{tabular}`);
   writeFileSync(join(root, 'figure.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));

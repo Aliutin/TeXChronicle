@@ -2,9 +2,9 @@
 
 [English](../ROADMAP.md) · [简体中文](ROADMAP.zh-CN.md) · [日本語](ROADMAP.ja.md) · [한국어](ROADMAP.ko.md) · [Español](ROADMAP.es.md) · [Français](ROADMAP.fr.md) · **Deutsch** · [Português](ROADMAP.pt.md)
 
-## Bereits umgesetzt: sichere gleichzeitige Nutzung von MagicTeX' eigenem Zustand
+## Bereits umgesetzt: sichere gleichzeitige Nutzung von TeXChronicle' eigenem Zustand
 
-Jede Claude-Code-Sitzung, die sich mit dem `magictex`-MCP-Server eines Projekts verbindet, startet ihren **eigenen, getrennten Prozess** (stdio-MCP = ein Kindprozess pro Client) — zwei Sitzungen, die am selben Paper arbeiten, teilen sich also keinerlei Zustand im Speicher. Bisher hinderte nichts die beiden daran, um dieselben Dateien auf der Festplatte zu wettlaufen.
+Jede Claude-Code-Sitzung, die sich mit dem `texchronicle`-MCP-Server eines Projekts verbindet, startet ihren **eigenen, getrennten Prozess** (stdio-MCP = ein Kindprozess pro Client) — zwei Sitzungen, die am selben Paper arbeiten, teilen sich also keinerlei Zustand im Speicher. Bisher hinderte nichts die beiden daran, um dieselben Dateien auf der Festplatte zu wettlaufen.
 
 - **Prozessübergreifende Sperre** (`src/lock.ts`) — eine exklusive Lock-Datei unter `.latex-preview/.lock`, per atomarer Erstellung (`O_EXCL`) erworben, mit Wiederherstellung bei veralteten Sperren (eine tote Besitzer-PID oder eine über 30s alte Sperre wird automatisch entfernt, damit ein abgestürzter Agent nicht dauerhaft alle anderen blockiert).
 - **Was dadurch geschützt wird**: `add_comment` / `resolve_comment` / `reply_to_comment` / Ablehnen-und-Löschen (alle Schreiboperationen von `commentsStore.ts`) sowie das Erstellen/Wiederherstellen von Checkpoints (`createCheckpoint`, `restoreCheckpoint`, `restoreFile`) — jede läuft jetzt als vollständiger Lese-Ändern-Schreiben-Vorgang in **einem prozessübergreifenden kritischen Abschnitt**, statt lesen → ändern → schreiben ohne gegenseitigen Ausschluss.

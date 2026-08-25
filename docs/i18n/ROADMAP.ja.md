@@ -2,9 +2,9 @@
 
 [English](../ROADMAP.md) · [简体中文](ROADMAP.zh-CN.md) · **日本語** · [한국어](ROADMAP.ko.md) · [Español](ROADMAP.es.md) · [Français](ROADMAP.fr.md) · [Deutsch](ROADMAP.de.md) · [Português](ROADMAP.pt.md)
 
-## 実装済み:MagicTeX 自身の状態を安全に並行利用
+## 実装済み:TeXChronicle 自身の状態を安全に並行利用
 
-プロジェクトの `magictex` MCP サーバーに接続する Claude Code セッションはそれぞれ**独立したプロセス**を起動します(stdio MCP はクライアントごとに子プロセス 1 つ)——つまり同じ論文を扱う 2 つのセッションはメモリ上の状態を一切共有しません。これまで、両者が同じディスク上のファイルを取り合うのを防ぐ仕組みは何もありませんでした。
+プロジェクトの `texchronicle` MCP サーバーに接続する Claude Code セッションはそれぞれ**独立したプロセス**を起動します(stdio MCP はクライアントごとに子プロセス 1 つ)——つまり同じ論文を扱う 2 つのセッションはメモリ上の状態を一切共有しません。これまで、両者が同じディスク上のファイルを取り合うのを防ぐ仕組みは何もありませんでした。
 
 - **クロスプロセスロック**(`src/lock.ts`)——`.latex-preview/.lock` に置かれる排他ロックファイル。アトミックな作成(`O_EXCL`)で取得し、失効時の回復機能付き(所有者プロセスが死んでいるか、ロックが 30 秒以上古い場合は自動でクリアされるので、クラッシュした agent が他を永久にブロックすることはありません)。
 - **保護される範囲**:`add_comment` / `resolve_comment` / `reply_to_comment` / 却下して削除(`commentsStore.ts` のすべての変更処理)と、チェックポイントの作成・復元(`createCheckpoint`、`restoreCheckpoint`、`restoreFile`)——いずれも「読み込み→変更→書き込み」の一連の流れが**ひとつのクロスプロセス・クリティカルセクション**として実行されるようになりました(以前は排他制御なしの読み込み→変更→書き込みでした)。

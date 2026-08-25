@@ -3,7 +3,7 @@
 // history loop directly from a terminal, without an LLM or MCP client.
 import { existsSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import open from 'open';
@@ -12,8 +12,10 @@ import { getPreview, shutdownEngine } from './engine/browserHost.js';
 import { summarizeErrors } from './project/parseLog.js';
 import type { Backend, Engine } from './project/compileProject.js';
 import { startWatching, stopWatching } from './watch/fileWatcher.js';
-import { chooseLaunchTarget, resolveLaunchTarget } from './launcher.js';
+import { canonicalizeLaunchTarget, chooseLaunchTarget, inferLaunchTarget, resolveLaunchTarget } from './launcher.js';
 import { rememberRecentProject } from './recentProjects.js';
+import { resolveMainFile } from './project/resolveMainFile.js';
+import { acquireProjectInstance, type OwnedProjectInstance } from './projectInstance.js';
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const ENGINES = new Set<Engine>(['xelatex', 'pdflatex', 'lualatex']);
@@ -21,14 +23,14 @@ const BACKENDS = new Set<Backend>(['auto', 'system', 'wasm']);
 const SHUTDOWN_BUDGET_MS = 3000;
 const launcherPid = process.ppid;
 let launcherWatch: NodeJS.Timeout | null = null;
+let ownedInstance: OwnedProjectInstance | null = null;
 
-const HELP = `Open a MagicTeX workspace without an LLM.
+const HELP = `Open a TeXChronicle workspace without an LLM.
 
 Usage:
-  magictex preview [main.tex] [options]
-  magictex open                       Reopen a recent project or browse for .tex
-  magictex install-launcher           Add Desktop + Start-menu shortcuts (Windows)
-  magictex-mcp preview [main.tex] [options]
+  texchronicle preview [main.tex] [options]
+  texchronicle open                       Reopen a recent project or browse for .tex
+  texchronicle install-launcher           Add Desktop + Start-menu shortcuts (Windows)
 
 Options:
   -p, --project <directory>    Project root (default: current directory)
@@ -36,23 +38,27 @@ Options:
       --backend <name>         auto, system, or wasm (default: auto)
       --shell-escape           Permit shell escape with the system backend
       --no-open                Print the URL without launching a browser
+      --exit-after-initial-compile
+                              Stop after the first compile (portable/CI diagnostics)
   -h, --help                   Show this help
 
 Examples:
-  magictex preview main.tex
-  magictex open
-  magictex preview -p "C:\\papers\\study" paper.tex
+  texchronicle preview main.tex
+  texchronicle open
+  texchronicle preview -p "C:\\papers\\study" paper.tex
 
-Keep this terminal open while editing. Press Ctrl+C to stop MagicTeX.`;
+Keep this terminal open while editing. Press Ctrl+C to stop TeXChronicle.`;
 
 let shutdownRun: Promise<void> | null = null;
 function shutdown(why: string): Promise<void> {
   shutdownRun ??= (async () => {
-    console.log(`\n[MagicTeX] stopping (${why})…`);
+    console.log(`\n[TeXChronicle] stopping (${why})…`);
     if (launcherWatch) clearInterval(launcherWatch);
     launcherWatch = null;
     await stopWatching().catch(() => {});
     await shutdownEngine().catch(() => {});
+    await ownedInstance?.release().catch(() => {});
+    ownedInstance = null;
   })();
   return shutdownRun;
 }
@@ -103,6 +109,7 @@ async function main(): Promise<void> {
         'shell-escape': { type: 'boolean' },
         'no-open': { type: 'boolean' },
         desktop: { type: 'boolean' },
+        'exit-after-initial-compile': { type: 'boolean' },
         help: { type: 'boolean', short: 'h' },
       },
     });
@@ -133,15 +140,37 @@ async function main(): Promise<void> {
   if (process.argv[2] === 'open' && !rawMain && !projectOption) {
     launchTarget = await chooseLaunchTarget(process.cwd());
     if (!launchTarget) {
-      console.log('[MagicTeX] No file selected.');
+      console.log('[TeXChronicle] No file selected.');
       return;
     }
   } else {
-    launchTarget = resolveLaunchTarget(process.cwd(), projectOption, rawMain);
+    launchTarget = !projectOption && rawMain && isAbsolute(rawMain)
+      ? await inferLaunchTarget(process.cwd(), rawMain)
+      : resolveLaunchTarget(process.cwd(), projectOption, rawMain);
   }
-  const { projectRoot, mainFile } = launchTarget;
+  launchTarget = await canonicalizeLaunchTarget(launchTarget);
+  const { projectRoot } = launchTarget;
   const projectInfo = await stat(projectRoot).catch(() => null);
   if (!projectInfo?.isDirectory()) throw new Error(`Project directory does not exist: ${projectRoot}`);
+  const resolvedMain = await resolveMainFile(projectRoot, launchTarget.mainFile);
+  const checkedMain = await canonicalizeLaunchTarget({ projectRoot, mainFile: resolvedMain });
+  const mainFile = checkedMain.mainFile!;
+
+  // Remember the valid selection before starting a server or a potentially long
+  // first compile. Closing the window during startup must not make the project
+  // disappear from Recent projects.
+  await rememberRecentProject(projectRoot, mainFile).catch((error) => {
+    console.warn(`[TeXChronicle] could not update Recent projects: ${(error as Error).message}`);
+  });
+
+  const instance = await acquireProjectInstance(projectRoot);
+  if (!instance.owned) {
+    if (!instance.url) throw new Error(`This project is already starting in another TeXChronicle process${instance.pid ? ` (PID ${instance.pid})` : ''}. Try again in a moment.`);
+    console.log(`[TeXChronicle] project is already open: ${instance.url}`);
+    if (!parsed.values['no-open']) await open(instance.url).catch(() => {});
+    return;
+  }
+  ownedInstance = instance;
 
   const desktopMode = parsed.values.desktop === true;
   enableLifecycleMonitoring(desktopMode);
@@ -157,37 +186,42 @@ async function main(): Promise<void> {
   const preview = await getPreview();
   const hasWorkspace = existsSync(join(PKG_ROOT, 'ui', 'dist', 'index.html'));
   const workspaceUrl = hasWorkspace ? `${preview.url}/app` : preview.viewerUrl;
+  await ownedInstance.publish(workspaceUrl);
 
-  console.log(`[MagicTeX] project: ${projectRoot}`);
-  console.log(`[MagicTeX] workspace: ${workspaceUrl}`);
+  console.log(`[TeXChronicle] project: ${projectRoot}`);
+  console.log(`[TeXChronicle] workspace: ${workspaceUrl}`);
   console.log(desktopMode
-    ? '[MagicTeX] watching for edits; close this window to stop.'
-    : '[MagicTeX] watching for edits; press Ctrl+C to stop.');
+    ? '[TeXChronicle] watching for edits; close this window to stop.'
+    : '[TeXChronicle] watching for edits; press Ctrl+C to stop.');
   if (!parsed.values['no-open']) {
     await open(workspaceUrl).catch((error) => {
-      console.warn(`[MagicTeX] could not open the browser: ${(error as Error).message}`);
+      console.warn(`[TeXChronicle] could not open the browser: ${(error as Error).message}`);
     });
   }
 
-  console.log('[MagicTeX] initial compile running — the first PDF and History checkpoint appear together after it succeeds.');
+  console.log('[TeXChronicle] initial compile running — the first PDF and History checkpoint appear together after it succeeds.');
   const result = await requestCompile();
-  await rememberRecentProject(projectRoot, result.mainFile).catch((error) => {
-    console.warn(`[MagicTeX] could not update Recent projects: ${(error as Error).message}`);
-  });
   const errors = result.verdict?.errors.length ?? 0;
-  if (result.success && errors === 0) {
-    console.log(`[MagicTeX] ✓ ${result.mainFile}: ${result.engine} · ${result.backend}, ${result.ms}ms`);
+  const clean = result.success && errors === 0;
+  if (clean) {
+    console.log(`[TeXChronicle] ✓ ${result.mainFile}: ${result.engine} · ${result.backend}, ${result.ms}ms`);
   } else if (result.success) {
-    console.warn(`[MagicTeX] ⚠ ${result.mainFile} rendered with ${errors} error${errors === 1 ? '' : 's'}; the previous clean PDF is preserved.`);
+    console.warn(`[TeXChronicle] ⚠ ${result.mainFile} rendered with ${errors} error${errors === 1 ? '' : 's'}; the previous clean PDF is preserved.`);
     console.warn(summarizeErrors(result.log || ''));
   } else {
-    console.error(`[MagicTeX] ✖ ${result.mainFile} failed to compile.`);
+    console.error(`[TeXChronicle] ✖ ${result.mainFile} failed to compile.`);
     console.error(summarizeErrors(result.log || result.error || ''));
+  }
+
+  if (parsed.values['exit-after-initial-compile']) {
+    if (clean) console.log('[TeXChronicle] PORTABLE_SELF_TEST_OK');
+    else process.exitCode = 1;
+    await shutdown('initial compile complete');
   }
 }
 
 main().catch(async (error) => {
-  console.error(`[MagicTeX] ${String((error as Error).message ?? error)}`);
+  console.error(`[TeXChronicle] ${String((error as Error).message ?? error)}`);
   await shutdown('startup error');
   process.exitCode = 1;
 });

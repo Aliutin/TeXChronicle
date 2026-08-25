@@ -1,34 +1,23 @@
-# MagicTeX — AI 에이전트를 위한 LaTeX 편집기
+# TeXChronicle — AI 에이전트를 위한 LaTeX 편집기
 
 <!-- badges -->
-[![npm](https://img.shields.io/npm/v/magictex-mcp?logo=npm)](https://www.npmjs.com/package/magictex-mcp)
-[![MCP registry](https://img.shields.io/badge/MCP%20registry-io.github.ZoeLinUTS%2Fmagictex-6f42c1)](https://registry.modelcontextprotocol.io)
-[![CI](https://github.com/ZoeLinUTS/MagicTeX-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ZoeLinUTS/MagicTeX-mcp/actions/workflows/ci.yml)
-[![stars](https://img.shields.io/github/stars/ZoeLinUTS/MagicTeX-mcp?style=flat)](https://github.com/ZoeLinUTS/MagicTeX-mcp/stargazers)
-[![last commit](https://img.shields.io/github/last-commit/ZoeLinUTS/MagicTeX-mcp)](https://github.com/ZoeLinUTS/MagicTeX-mcp/commits/main)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-blue)](../../LICENSE)
-[![Sponsor](https://img.shields.io/badge/%E2%9D%A4-Sponsor-db61a2)](https://github.com/sponsors/ZoeLinUTS)
+
+> The product name is current, but this translation still contains pre-release installation details. See the [English README](../../README.md) for the current portable/source setup and publishing status.
 
 [English](../../README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · **한국어** · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md)
 
-![MagicTeX workspace](../images/workspace.png)
+![TeXChronicle workspace](../images/workspace.png)
 
-**MagicTeX** 는 **AI 에이전트를 위해 만들어진 LaTeX 편집기**입니다. MCP 서버를 통해 Claude
+**TeXChronicle** 는 **AI 에이전트를 위해 만들어진 LaTeX 편집기**입니다. MCP 서버를 통해 Claude
 Code 에 연결되는 Overleaf 스타일의 **단일 창 작업 공간**으로, **로컬 TeX 설치도 Overleaf
 계정도 필요 없습니다**: 실시간 PDF 미리보기, **비주얼(WYSIWYG) 모드**가 있는 소스 편집기,
 변경 이력, 그리고 **렌더링된 PDF 위에 고정한 코멘트가 그대로 에이전트의 편집 지시가 됩니다**.
-(npm 패키지: `magictex-mcp`)
+(npm 패키지: `texchronicle`)
 
 헤드리스 브라우저에서 실행되는 WASM TeX Live 2026 엔진
 ([texlyre-busytex](https://github.com/TeXlyre/texlyre-busytex))으로 컴파일하므로, 수 GB를
 설치할 필요가 없습니다 — 한 번만 WASM 자산을 내려받으면 됩니다.
-
-## 설치 전에 먼저 보기
-
-**[zoelin.dev/tools/magictex](https://zoelin.dev/tools/magictex)** 에 코멘트 → 에이전트 루프를
-단계별로 따라가는 워크스루가 있습니다. 모든 내용은 실제 도구 출력에서 가져왔습니다. 호스팅된
-인스턴스가 아니라 리플레이입니다——TeX 엔진은 약 650 MB를 한 번 내려받아야 하고, 에이전트 쪽
-절반은 Claude 그 자체이므로, MagicTeX는 웹페이지 안이 아니라 당신의 프로젝트 옆에서 실행됩니다.
 
 ## 작업 공간
 
@@ -85,9 +74,9 @@ Code 에 연결되는 Overleaf 스타일의 **단일 창 작업 공간**으로, 
 
 ## 설치
 
-MagicTeX 은 npm 에서 [`magictex-mcp`](https://www.npmjs.com/package/magictex-mcp) 이고,
+TeXChronicle 은 npm 에서 [`texchronicle`](https://www.npmjs.com/package/texchronicle) 이고,
 [공식 MCP 레지스트리](https://registry.modelcontextprotocol.io) 에는
-**`io.github.ZoeLinUTS/magictex`** 로 등록되어 있습니다 — 레지스트리를 읽는 클라이언트라면
+**`io.github.Aliutin/texchronicle`** 로 등록되어 있습니다 — 레지스트리를 읽는 클라이언트라면
 어디서든 찾을 수 있습니다. 클론할 것도, TeX 설치도 필요 없습니다. `npx` 가 첫 사용 시
 가져옵니다.
 
@@ -96,7 +85,7 @@ MagicTeX 은 npm 에서 [`magictex-mcp`](https://www.npmjs.com/package/magictex-
    ```json
    {
      "mcpServers": {
-       "magictex": { "command": "npx", "args": ["-y", "magictex-mcp"] }
+       "texchronicle": { "command": "npx", "args": ["-y", "texchronicle"] }
      }
    }
    ```
@@ -107,25 +96,25 @@ MagicTeX 은 npm 에서 [`magictex-mcp`](https://www.npmjs.com/package/magictex-
    새로고침됩니다.
 
    클론에서 로컬 개발할 때는 소스를 가리키게 하세요:
-   `"command": "npx", "args": ["tsx", "/절대경로/magictex-mcp/src/server.ts"]`
+   `"command": "npx", "args": ["tsx", "/절대경로/texchronicle/src/server.ts"]`
 
 WASM 자산은 이 저장소에 **들어 있지 않습니다**. 첫 실행 때 **사용자별** 캐시로 내려받습니다 —
-macOS 는 `~/Library/Caches/magictex`, Linux 는 `$XDG_CACHE_HOME/magictex`, Windows 는
-`%LOCALAPPDATA%\magictex`. 그래서 MagicTeX 을 업그레이드해도 다시 받지 않고, 체크아웃 ·
-전역 설치 · `npx` 실행이 하나의 사본을 공유합니다. `MAGICTEX_ASSETS_DIR` 로 위치를 바꿀 수
+macOS 는 `~/Library/Caches/texchronicle`, Linux 는 `$XDG_CACHE_HOME/texchronicle`, Windows 는
+`%LOCALAPPDATA%\texchronicle`. 그래서 TeXChronicle 을 업그레이드해도 다시 받지 않고, 체크아웃 ·
+전역 설치 · `npx` 실행이 하나의 사본을 공유합니다. `TEXCHRONICLE_ASSETS_DIR` 로 위치를 바꿀 수
 있습니다. 미리 받으려면: `npx texlyre-busytex download-assets <그 디렉터리>`.
 
 ## Claude Code 플러그인으로 설치(슬래시 명령)
 
-타이핑을 줄이려면 MagicTeX 를 플러그인으로 설치 — 한 번의 설치로 MCP 서버와 슬래시 명령을
+타이핑을 줄이려면 TeXChronicle 를 플러그인으로 설치 — 한 번의 설치로 MCP 서버와 슬래시 명령을
 모두 얻습니다:
 
 ```
-/plugin marketplace add ZoeLinUTS/MagicTeX-mcp
-/plugin install magictex
+/plugin marketplace add Aliutin/TeXChronicle
+/plugin install texchronicle
 ```
 
-- **`/magic-latex`** — 컴파일하고 작업 공간 열기.
+- **`/texchronicle`** — 컴파일하고 작업 공간 열기.
 - **`/ai-review [skill]`** — 스킬로 논문을 검토(기본값 `academic-paper-revision`, 임의 스킬
   이름 가능)하고 확인용 코멘트를 게시. 미설치 스킬은 설치 안내를 표시.
 - **`/address-comments`** — 수락된 코멘트 해결(`/loop 60s /address-comments` 가능).
@@ -151,7 +140,7 @@ macOS 는 `~/Library/Caches/magictex`, Linux 는 `$XDG_CACHE_HOME/magictex`, Win
 
 꼭 입력할 필요는 없습니다——평범한 말로도 됩니다(“미리보기 렌더링”, “코멘트 처리해줘”). 명령은 빠르고 가르치기 쉬운 단축일 뿐입니다.
 
-> 플러그인에 MCP 서버(`npx magictex-mcp`)가 함께 들어 있으므로 플러그인만 설치하면
+> 플러그인에 MCP 서버(`npx texchronicle`)가 함께 들어 있으므로 플러그인만 설치하면
 > 충분합니다 — 위의 `.mcp.json` 은 플러그인을 설치하고 싶지 않을 때의 대안입니다.
 > 슬래시 명령은 어느 쪽이든 동작합니다.
 
@@ -169,7 +158,7 @@ MCP를 지원하는 모든 클라이언트를 위한 인터페이스입니다. (
 | `show_diff` | `checkpoint?` | 나란히 보는 diff를 **이미지**로 렌더링해 대화에 인라인 표시. 기본은 커밋되지 않은 현재 변경, checkpoint sha를 넘기면 해당 저장본. |
 | `list_checkpoints` | `limit?`(기본값 10, 최대 50) | 최근 checkpoint와 sha를 최신순으로—`show_diff`에 넘길 것을 찾는 용도. |
 
-**핵심 기능은 이 도구들 위에 만들어진 것이지, 이 표 안에 있지 않습니다.** `/magic-latex`, `/ai-review`, `/address-comments`, ⚡ `/ultra-agents` 는 위의 도구들을 엮어 실행하는 Claude Code **플러그인 명령**입니다—`/ultra-agents` 는 「검토 → 자동 수락 → 수정」을 허용한 라운드 수만큼 이어 돌리며, `add_comment` 의 `accepted` 플래그가 바로 그것을 위해 있습니다. MCP 표면에는 포함되지 않으므로 다른 MCP 클라이언트에는 이 7개만 보입니다. 위 플러그인 절과 [docs/AGENT-LOOP.ko.md](AGENT-LOOP.ko.md) 참고.
+**핵심 기능은 이 도구들 위에 만들어진 것이지, 이 표 안에 있지 않습니다.** `/texchronicle`, `/ai-review`, `/address-comments`, ⚡ `/ultra-agents` 는 위의 도구들을 엮어 실행하는 Claude Code **플러그인 명령**입니다—`/ultra-agents` 는 「검토 → 자동 수락 → 수정」을 허용한 라운드 수만큼 이어 돌리며, `add_comment` 의 `accepted` 플래그가 바로 그것을 위해 있습니다. MCP 표면에는 포함되지 않으므로 다른 MCP 클라이언트에는 이 7개만 보입니다. 위 플러그인 절과 [docs/AGENT-LOOP.ko.md](AGENT-LOOP.ko.md) 참고.
 
 ## 터미널에서는 이렇게 보입니다
 
@@ -179,7 +168,7 @@ Claude Code 에서 보이는 것이 이것이고, 브라우저 작업 공간(위
 
 당신이 입력:
 ```
-/magic-latex
+/texchronicle
 ```
 Claude 가 `render_preview` 를 호출하고 이렇게 답합니다:
 ```
@@ -264,8 +253,8 @@ flowchart LR
 - 일회성 WASM TeX Live 자산을 위한 약 650 MB 디스크 — 첫 실행에 전부 내려받으며, 세 개의
   패키지 세트로 나뉩니다(basic 87 MB, recommended 190 MB, extra 324 MB, 그리고 엔진 31 MB).
   보통의 논문은 basic 만 *읽어들이고*, 나머지 둘은 필요해질 때까지 디스크에 남아 있습니다.
-  설치별이 아니라 사용자별 캐시라 MagicTeX 을 업그레이드해도 다시 받지 않습니다. 위치는
-  `MAGICTEX_ASSETS_DIR` 로 바꿀 수 있습니다.
+  설치별이 아니라 사용자별 캐시라 TeXChronicle 을 업그레이드해도 다시 받지 않습니다. 위치는
+  `TEXCHRONICLE_ASSETS_DIR` 로 바꿀 수 있습니다.
 - **로컬 TeX 배포판은 선택 사항입니다.** 언제 필요한지는 아래를 보세요.
 
 ### 로컬 TeX 배포판이 필요한가요?
@@ -275,7 +264,7 @@ flowchart LR
 패키지는 들어 있지 않습니다. 빠진 게 있으면 조용히 잘못된 PDF를 주는 대신 알려
 드립니다.
 
-Overleaf와 완전히 같은 출력이 필요할 때 설치하세요. MagicTeX가 알아서 찾아
+Overleaf와 완전히 같은 출력이 필요할 때 설치하세요. TeXChronicle가 알아서 찾아
 씁니다. 설정은 필요 없습니다:
 
 | | |
@@ -284,7 +273,7 @@ Overleaf와 완전히 같은 출력이 필요할 때 설치하세요. MagicTeX�
 | Linux | `texlive-full` |
 | Windows | [TeX Live](https://tug.org/texlive/), or [MiKTeX](https://miktex.org/) **plus** [Strawberry Perl](https://strawberryperl.com/) |
 
-> MagicTeX이 `PATH`에서 찾는 것은 `latexmk`이지만, 이것은 따로 설치하는 물건이
+> TeXChronicle이 `PATH`에서 찾는 것은 `latexmk`이지만, 이것은 따로 설치하는 물건이
 > 아니라 위 배포판에 포함된 드라이버 스크립트입니다. 설치 후 `which latexmk`로
 > 확인은 `which latexmk`가 아니라 **`latexmk -version`**으로 하세요. `latexmk`는
 > Perl 스크립트인데 MiKTeX은 `latexmk.exe`를 `PATH`에 두면서 그것을 실행할 Perl은
@@ -335,20 +324,11 @@ npm start            # stdio 로 서버 실행(수동 MCP 클라이언트용)
 편집(reviewer / author / defender 가 각자의 git 브랜치에서 작업하고 마지막에 병합)이 다음
 마일스톤입니다.
 
-## 이 프로젝트 후원
-
-MagicTeX 는 무료 오픈 소스(AGPL-3.0)입니다. 논문 작업 시간을 아꼈다면
-**[이 프로젝트를 후원](https://github.com/sponsors/ZoeLinUTS)**해 주세요. 저장소에 ⭐ 도 큰
-힘이 됩니다.
-
 ## 감사의 말
 
-MagicTeX은 [Zoe Lin](https://zoelin.dev)가 개발하고 관리하며, **[Claude Code](https://claude.com/claude-code)**로 만들었습니다.
+TeXChronicle began as a fork of [MagicTeX MCP](https://github.com/ZoeLinUTS/MagicTeX-mcp) by Zoe Lin and contributors, and has since been substantially redesigned around human-first editing and section-level history. See [NOTICE.md](../../NOTICE.md) for provenance.
 
-Knuth가 자기 책의 모양새를 받아들이는 대신 10년에 걸쳐 조판 시스템을 직접 만든
-이야기 — 이 프로젝트가 여전히 씨름하고 있는 그 이야기 — 를 들려준 **David Turnbull**
-에게 감사드립니다. 그리고 [`texlyre-busytex`](https://github.com/TeXlyre/texlyre-busytex)의 메인테이너들께. 그 WASM TeX Live가 없었다면
-로컬에서는 아무것도 돌아가지 않았을 겁니다.
+Thanks also to the maintainers of [texlyre-busytex](https://github.com/TeXlyre/texlyre-busytex), whose WASM TeX Live engine powers the bundled compiler.
 
 ## 라이선스
 

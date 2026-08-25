@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// magictex-mcp — MCP stdio server exposing one tool, render_preview.
+// TeXChronicle MCP stdio server exposing one tool, render_preview.
 // Everything heavy (headless browser, WASM engine, preview server, file watcher)
 // is lazily started on the first render_preview call, so merely connecting is cheap.
 import { existsSync, readFileSync } from 'node:fs';
@@ -30,7 +30,7 @@ const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url));
 // Read the version rather than restating it. Hardcoded, it sat at 0.0.1 through
 // every release — so the one place a user could check what they were running
 // reported a version that never shipped on npm. The install line is
-// `npx -y magictex-mcp` with no pin, and npx caches, which makes "did my update
+// `npx -y texchronicle` with no pin, and npx caches, which makes "did my update
 // actually take effect?" a question worth being able to answer.
 const { version } = JSON.parse(readFileSync(join(PKG_ROOT, 'package.json'), 'utf8')) as { version: string };
 
@@ -40,7 +40,7 @@ const { version } = JSON.parse(readFileSync(join(PKG_ROOT, 'package.json'), 'utf
 // playwright threw first and it never printed. It could only fire when every
 // dependency loaded cleanly — precisely when it was not needed.
 
-const server = new McpServer({ name: 'magictex-mcp', version });
+const server = new McpServer({ name: 'texchronicle', version });
 // The React workspace is the primary UI; fall back to the legacy /viewer only
 // when ui/dist hasn't been built (e.g. a fresh clone before `npm run build:ui`).
 const hasWorkspace = existsSync(join(PKG_ROOT, 'ui', 'dist', 'index.html'));
@@ -86,7 +86,7 @@ server.registerTool(RENDER_PREVIEW_NAME, renderPreviewConfig, async ({ mainFile,
           // Naming the path and the OS error is the whole point: a permissions
           // problem and a full disk need different things from the reader, and
           // "install git" answers neither.
-          : `MagicTeX couldn't create its history store — ${history.detail ?? 'unknown error'}. git itself is fine.`;
+          : `TeXChronicle couldn't create its history store — ${history.detail ?? 'unknown error'}. git itself is fine.`;
         notes.push(`Change history is off: ${why} Edits aren't being recorded and you can't diff or roll back. Everything else works.`);
       }
       // Say it first: this PDF came off a different toolchain than the one the
@@ -107,7 +107,7 @@ server.registerTool(RENDER_PREVIEW_NAME, renderPreviewConfig, async ({ mainFile,
         // this has no local TeX at all. "Retry with backend: system if you have
         // one" was a dead end for exactly the people who read it.
         if (result.backend !== 'system') {
-          notes.push(`These packages come from the bundled WASM TeX Live, which is a subset. For output that matches Overleaf, MagicTeX will use a local TeX install automatically once there is one.\n\n${INSTALL_TEX_HELP}`);
+          notes.push(`These packages come from the bundled WASM TeX Live, which is a subset. For output that matches Overleaf, TeXChronicle will use a local TeX install automatically once there is one.\n\n${INSTALL_TEX_HELP}`);
         }
       }
 
@@ -126,7 +126,7 @@ server.registerTool(RENDER_PREVIEW_NAME, renderPreviewConfig, async ({ mainFile,
       : '';
     const missingCls = result.verdict?.missingClasses ?? [];
     const clsHint = missingCls.length
-      ? `\n\nThe document class ${missingCls.map((c) => `\`${c}.cls\``).join(', ')} is not in the bundled TeX Live subset, and a class cannot be stubbed the way an unused package can. Put the .cls next to the source — for a conference paper it comes with the author kit, and Overleaf projects can download it.${result.backend === 'system' ? '' : `\n\nA local TeX install would also have it, and MagicTeX picks one up automatically.\n\n${INSTALL_TEX_HELP}`}`
+      ? `\n\nThe document class ${missingCls.map((c) => `\`${c}.cls\``).join(', ')} is not in the bundled TeX Live subset, and a class cannot be stubbed the way an unused package can. Put the .cls next to the source — for a conference paper it comes with the author kit, and Overleaf projects can download it.${result.backend === 'system' ? '' : `\n\nA local TeX install would also have it, and TeXChronicle picks one up automatically.\n\n${INSTALL_TEX_HELP}`}`
       : '';
     // A package the source really uses is deliberately never stubbed — but until
     // now that left the reader with a raw log line and nothing else. `newtxmath
@@ -231,7 +231,8 @@ server.registerTool(RESOLVE_COMMENT_NAME, resolveCommentConfig, async ({ id, not
   const projectRoot = process.cwd();
   setProjectRoot(projectRoot);
   const current = await matchingCheckpointSha(projectRoot);
-  if (current.dirty) {
+  const shown = peekPreview()?.renderState();
+  if (!current.sha || current.dirty || (shown && (shown.status !== 'ok' || shown.checkpoint !== current.sha))) {
     return {
       isError: true,
       content: [{ type: 'text', text: '✖ This source is not the latest successful checkpoint yet. Wait for the current compile (or fix its error), then resolve the comment so its resolution is linked to the version that actually rendered.' }],
@@ -240,7 +241,7 @@ server.registerTool(RESOLVE_COMMENT_NAME, resolveCommentConfig, async ({ id, not
   const updated = await updateComment(projectRoot, id, {
     status: 'resolved',
     resolvedNote: note,
-    ...(current.sha ? { resolvedCheckpoint: current.sha } : {}),
+    resolvedCheckpoint: current.sha,
   });
   if (!updated) {
     return { isError: true, content: [{ type: 'text', text: `✖ Unknown comment id: ${id}` }] };
@@ -254,6 +255,7 @@ server.registerTool(RESOLVE_COMMENT_NAME, resolveCommentConfig, async ({ id, not
 server.registerTool(ADD_COMMENT_NAME, addCommentConfig, async ({ quote, comment, role, page, accepted }) => {
   const projectRoot = process.cwd();
   setProjectRoot(projectRoot);
+  const anchor = await findAnchor(projectRoot, quote).catch(() => null);
   const created = await addComment(projectRoot, {
     page: page ?? 1,
     quote,
@@ -262,6 +264,7 @@ server.registerTool(ADD_COMMENT_NAME, addCommentConfig, async ({ quote, comment,
     role: role ?? 'reviewer',
     status: accepted ? 'accepted' : 'suggested',
     createdCheckpoint: await latestCheckpointSha(projectRoot),
+    ...(anchor ? { sourceFile: anchor.file, sourceLine: anchor.line } : {}),
   });
   try { peekPreview()?.broadcast({ type: 'comments-changed' }); } catch { /* no viewer */ }
   const where = accepted
@@ -290,7 +293,7 @@ server.registerTool(REPLY_COMMENT_NAME, replyCommentConfig, async ({ id, text, r
 // servers accumulated in this repo's own CI and starved a later phase into a
 // fifteen-minute timeout.
 //
-// The install line is `npx -y magictex-mcp`, and killing npx does not reliably
+// The install line is `npx -y texchronicle`, and killing npx does not reliably
 // kill the node grandchild, which is what makes handlers here worth having
 // rather than relying on process teardown.
 // The whole teardown has to fit inside the client's fuse: StdioClientTransport
@@ -309,7 +312,7 @@ let shutdownRun: Promise<void> | null = null;
 
 function shutdown(why: string): Promise<void> {
   shutdownRun ??= (async () => {
-    console.error(`[magictex-mcp] shutting down (${why})`);
+    console.error(`[texchronicle] shutting down (${why})`);
     // Watcher first: it can start a compile, and a compile started now would
     // keep the engine alive past the teardown that is about to close it.
     await stopWatching().catch(() => {});
@@ -321,7 +324,7 @@ function shutdown(why: string): Promise<void> {
 /** Tear down within the budget, then exit regardless. */
 function shutdownAndExit(why: string, code = 0): void {
   const bail = new Promise<void>((r) => setTimeout(() => {
-    console.error(`[magictex-mcp] shutdown exceeded ${SHUTDOWN_BUDGET_MS}ms — exiting anyway`);
+    console.error(`[texchronicle] shutdown exceeded ${SHUTDOWN_BUDGET_MS}ms — exiting anyway`);
     r();
   }, SHUTDOWN_BUDGET_MS).unref());
   void Promise.race([shutdown(why), bail]).then(() => process.exit(code));
@@ -341,4 +344,4 @@ process.stdin.on('close', () => shutdownAndExit('stdio closed'));
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-console.error('[magictex-mcp] ready on stdio');
+console.error('[texchronicle] ready on stdio');

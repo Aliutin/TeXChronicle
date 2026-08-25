@@ -49,10 +49,33 @@ test('comment creation and resolution retain their successful checkpoints', asyn
     });
     assert.equal((await listComments(d))[0].restoreReview?.scope, 'project');
 
+    await updateComment(d, c.id, {
+      restoreReview: null,
+      verifiedCheckpoint: 'c'.repeat(40),
+      verifiedAt: '2026-08-24T12:00:00.000Z',
+    });
+    const verified = (await listComments(d))[0];
+    assert.equal(verified.restoreReview, undefined);
+    assert.equal(verified.verifiedCheckpoint, 'c'.repeat(40));
+
     await updateComment(d, c.id, { status: 'accepted' });
     const reopened = (await listComments(d))[0];
     assert.equal(reopened.resolvedCheckpoint, undefined);
     assert.equal(reopened.restoreReview, undefined);
+    assert.equal(reopened.verifiedCheckpoint, undefined);
+  } finally { rmSync(d, { recursive: true, force: true }); }
+});
+
+test('comments retain a source anchor for scoped restore warnings', async () => {
+  const d = tmp();
+  try {
+    const c = await addComment(d, {
+      page: 2, quote: 'anchored prose', rects: [], text: 'fix',
+      sourceFile: 'sections\\introduction.tex', sourceLine: 17,
+    });
+    const stored = (await listComments(d))[0];
+    assert.equal(c.sourceFile, 'sections/introduction.tex');
+    assert.equal(stored.sourceLine, 17);
   } finally { rmSync(d, { recursive: true, force: true }); }
 });
 

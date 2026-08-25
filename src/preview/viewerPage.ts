@@ -55,7 +55,7 @@ export function viewerPageHtml(): string {
 <body>
   <div id="dead" role="alert" style="display:none">
     <strong>This window is no longer live.</strong>
-    The MagicTeX server it was connected to has stopped, so everything below is a
+    The TeXChronicle server it was connected to has stopped, so everything below is a
     snapshot from when it did — <em>including any error message</em>. Ask Claude to
     render a preview again; that opens a new window at a new address. This one can
     be closed.

@@ -23,7 +23,7 @@ const QUOTE = 'quick brown fox jumps over the lazy dog and keeps running well pa
 // against moved highlights by tens of pixels.
 const TOLERANCE_PX = 2;
 
-const proj = mkdtempSync(join(tmpdir(), 'magictex-zoom-'));
+const proj = mkdtempSync(join(tmpdir(), 'texchronicle-zoom-'));
 writeFileSync(join(proj, 'main.tex'), [
   String.raw`\documentclass[twocolumn]{article}`,
   String.raw`\begin{document}`,

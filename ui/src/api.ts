@@ -9,6 +9,7 @@ export interface Checkpoint {
   filesChanged: number;
   insertions: number;
   deletions: number;
+  hasPdf: boolean;
 }
 
 export type SectionChange = 'created' | 'edited' | 'renamed' | 'moved' | 'reordered' | 'structure' | 'descendant';
@@ -61,7 +62,7 @@ export interface SectionDiffResult {
 }
 
 export type WsMessage =
-  | { type: 'reload'; name?: string }
+  | { type: 'reload'; name?: string; checkpoint?: string }
   | { type: 'compiling' }
   | { type: 'compile-error'; log: string }
   | { type: 'comments-changed' }
@@ -90,9 +91,13 @@ export interface Comment {
   replies?: Reply[];
   created: string;
   createdCheckpoint?: string;
+  sourceFile?: string;
+  sourceLine?: number;
   resolvedNote?: string;
   resolvedAt?: string;
   resolvedCheckpoint?: string;
+  verifiedCheckpoint?: string;
+  verifiedAt?: string;
   restoreReview?: RestoreReview;
 }
 
@@ -110,7 +115,7 @@ let serverGone = false;
 
 export class ServerGoneError extends Error {
   constructor() {
-    super('The MagicTeX server this window was connected to has stopped. Restart MagicTeX from the terminal to open a new live window.');
+    super('The TeXChronicle server this window was connected to has stopped. Restart TeXChronicle from the terminal to open a new live window.');
     this.name = 'ServerGoneError';
   }
 }
@@ -134,7 +139,8 @@ export async function createComment(input: { page: number; quote: string; rects:
 
 export async function patchComment(id: string, patch: { status?: CommentStatus; text?: string; restoreReview?: null }): Promise<void> {
   requireLive();
-  await fetch(`/api/comments?id=${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
+  const r = await fetch(`/api/comments?id=${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
+  if (!r.ok) throw new Error((await r.text()) || 'comment update failed');
 }
 
 export async function removeComment(id: string): Promise<void> {
@@ -207,7 +213,7 @@ export async function restoreSection(section: string, sha: string): Promise<stri
   if (serverGone) return new ServerGoneError().message;
   const query = new URLSearchParams({ section, sha });
   const r = await fetch(`/git/restore-section?${query}`, { method: 'POST' });
-  return r.ok ? null : (await r.text()) || 'section restore failed';
+  return restoreResponse(r, 'section restore failed');
 }
 
 export function historicalPdfUrl(sha: string): string {
@@ -218,14 +224,24 @@ export function historicalPdfUrl(sha: string): string {
 export async function restoreCheckpoint(sha: string): Promise<string | null> {
   if (serverGone) return new ServerGoneError().message;
   const r = await fetch(`/git/restore?sha=${encodeURIComponent(sha)}`, { method: 'POST' });
-  return r.ok ? null : (await r.text()) || 'restore failed';
+  return restoreResponse(r, 'restore failed');
 }
 
 /** Restore a single file to a checkpoint version. Returns an error string or null. */
 export async function restoreFile(sha: string, path: string): Promise<string | null> {
   if (serverGone) return new ServerGoneError().message;
   const r = await fetch(`/git/restore-file?sha=${encodeURIComponent(sha)}&path=${encodeURIComponent(path)}`, { method: 'POST' });
-  return r.ok ? null : (await r.text()) || 'restore failed';
+  return restoreResponse(r, 'restore failed');
+}
+
+async function restoreResponse(response: Response, fallback: string): Promise<string | null> {
+  if (!response.ok) return (await response.text()) || fallback;
+  const result = await response.json().catch(() => ({})) as { compiled?: boolean; warning?: string };
+  if (result.warning) return `Restore succeeded. ${result.warning}`;
+  if (result.compiled === false) {
+    return 'Restore succeeded, but the restored source did not compile successfully. The previous PDF remains visible; open the compile log for details.';
+  }
+  return null;
 }
 
 /**
@@ -335,6 +351,7 @@ export function useLive(onMessage?: (m: WsMessage) => void) {
   // instant it was shown.
   const [compileSeq, setCompileSeq] = useState(0);
   const [pdfName, setPdfName] = useState('preview');
+  const [pdfCheckpoint, setPdfCheckpoint] = useState<string | undefined>();
   const cbRef = useRef(onMessage);
   cbRef.current = onMessage;
 
@@ -374,6 +391,7 @@ export function useLive(onMessage?: (m: WsMessage) => void) {
         }
         if (msg.type === 'reload') {
           if (msg.name) setPdfName(String(msg.name).split(/[\\/]/).pop()!.replace(/\.tex$/i, '') || 'preview');
+          setPdfCheckpoint(msg.checkpoint);
           setErrorLog('');
           setStatus('ok');
           setReloadTick((t) => t + 1);
@@ -410,5 +428,5 @@ export function useLive(onMessage?: (m: WsMessage) => void) {
     };
   }, []);
 
-  return { status, errorLog, reloadTick, pdfName, compileSeq };
+  return { status, errorLog, reloadTick, pdfName, pdfCheckpoint, compileSeq };
 }

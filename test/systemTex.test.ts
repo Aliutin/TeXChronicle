@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, chmodSync, copyFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { probeSystemTex, forgetSystemTex, isStaleLatexmkFailure, systemLatexmkArgs, systemTexUnavailableMessage, systemTexAdvice } from '../src/engine/systemTex.js';
+import { probeSystemTex, forgetSystemTex, isStaleLatexmkFailure, systemBuildDir, systemLatexmkArgs, systemTexUnavailableMessage, systemTexAdvice } from '../src/engine/systemTex.js';
 
 // "No local TeX" and "a local TeX that cannot run" are different problems with
 // opposite answers, and they used to produce the same sentence. A user installed
-// MiKTeX, MagicTeX kept saying no local TeX was found, and an agent eventually
+// MiKTeX, TeXChronicle kept saying no local TeX was found, and an agent eventually
 // gave up on the tool and invoked the compiler itself.
 
 // MiKTeX's actual output, kept verbatim — this is the string the fix has to
@@ -127,6 +127,12 @@ test('latexmk continues through recoverable MiKTeX first-pass failures', () => {
   assert.ok(args.includes('-f'), 'latexmk would stop before bibliography and reference reruns');
 });
 
+test('system TeX artifacts are isolated per TeXChronicle process', () => {
+  const root = join(tmpdir(), 'paper');
+  assert.notEqual(systemBuildDir(root, 1001), systemBuildDir(root, 1002));
+  assert.match(systemBuildDir(root, 1001).replace(/\\/g, '/'), /\.latex-preview\/build\/1001-[0-9a-f]{8}$/);
+});
+
 // ── the staleness fix ───────────────────────────────────────────────────────
 
 /**
@@ -200,7 +206,7 @@ test('Windows discovers installed MiKTeX and Strawberry Perl outside stale PATH'
 
 test('a TeX that appears after the first check is not ignored for the rest of the session', async () => {
   // The memo used to be permanent, so a `null` recorded at startup outlived any
-  // install — including one the user made *because* MagicTeX told them a package
+  // install — including one the user made *because* TeXChronicle told them a package
   // was missing. This is a long-lived stdio process; that window is the whole
   // working session.
   const dir = mkdtempSync(join(tmpdir(), 'faketex-'));

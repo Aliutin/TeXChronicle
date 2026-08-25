@@ -1,14 +1,14 @@
-# MagicTeX — 사용자 가이드
+# TeXChronicle — 사용자 가이드
 
 [English](../USER-GUIDE.md) · [简体中文](USER-GUIDE.zh-CN.md) · [日本語](USER-GUIDE.ja.md) · **한국어** · [Español](USER-GUIDE.es.md) · [Français](USER-GUIDE.fr.md) · [Deutsch](USER-GUIDE.de.md) · [Português](USER-GUIDE.pt.md)
 
-![MagicTeX 작업 공간](../images/workspace.png)
+![TeXChronicle 작업 공간](../images/workspace.png)
 
 ## 일상적인 사용
 
 1. 논문 프로젝트의 `.mcp.json`에 서버를 추가하고(README 참고) Claude Code를 재시작합니다.
    또는 플러그인을 설치해 슬래시 명령을 씁니다(아래).
-2. Claude에게 *"render a preview"* 라고 요청합니다(또는 `/magic-latex` 실행). **작업 공간**이
+2. Claude에게 *"render a preview"* 라고 요청합니다(또는 `/texchronicle` 실행). **작업 공간**이
    열립니다: 왼쪽에 **파일 트리 + 소스 편집기**, 가운데에 **라이브 PDF**, 오른쪽에 **Comments**
    (상단 바의 💬 **Comments** 버튼으로 토글).
 3. 이후로 PDF는 계속 라이브 상태입니다. 당신 편집기의 저장과 Claude의 수정 모두 자동으로
@@ -17,10 +17,10 @@
 
 ## 슬래시 명령(플러그인)
 
-한 번만 설치하면 — `/plugin marketplace add ZoeLinUTS/MagicTeX-mcp` 다음
-`/plugin install magictex` — 최소한의 타이핑으로 다룰 수 있습니다:
+한 번만 설치하면 — `/plugin marketplace add Aliutin/TeXChronicle` 다음
+`/plugin install texchronicle` — 최소한의 타이핑으로 다룰 수 있습니다:
 
-- **`/magic-latex`** — 컴파일하고 작업 공간 열기.
+- **`/texchronicle`** — 컴파일하고 작업 공간 열기.
 - **`/ai-review [skill]`** — 스킬로 논문 검토(기본값 `academic-paper-revision`, 임의 스킬 이름 가능)
   후 수락용 코멘트 게시.
 - **`/address-comments`** — 수락된 코멘트 해결(루프: `/loop 60s /address-comments`).
@@ -82,7 +82,7 @@ agent가 코멘트를 *제기*하게 하면서도 당신이 루프 안에 남을
 하이라이트는 pdf.js의 보이지 않는 *텍스트 레이어*(선택에 쓰이는 것과 같은 기하 정보)에서 그려집니다.
 이는 캔버스에 글리프가 실제로 그려지는 위치를 줄 단위로 근사한 것이라, 상자가 아주 조금 어긋날 수 있고
 확대하면 더 잘 보입니다. 이 작은 오차는 본질적이고 시각적인 문제일 뿐입니다. Claude가 문단을 수정하고
-PDF가 재배치된 뒤 생기던 큰 어긋남을 피하려고, MagicTeX는 **재컴파일할 때마다 하이라이트를 현재
+PDF가 재배치된 뒤 생기던 큰 어긋남을 피하려고, TeXChronicle는 **재컴파일할 때마다 하이라이트를 현재
 텍스트에 다시 고정**합니다(코멘트 인용의 앞뒤 구절을 매칭). 옛 좌표에 못 박지 않으므로 중간 단어가
 바뀌어도 텍스트를 따라갑니다. 문단이 삭제되거나 알아볼 수 없을 만큼 재작성되면 마지막으로 알려진
 위치로 되돌아갑니다.
@@ -165,6 +165,6 @@ WASM 엔진은 TeX Live의 **부분집합**(basic + recommended + extra)을 담�
   않습니다. 대다수 논문에 충분히 정확하지만, 최종 제출처(Overleaf나 투고 시스템)에서 반드시 최종
   컴파일을 하세요.
 - 변경 이력은 숨겨진 git ref(`refs/latex-preview/checkpoints`)에 저장되며 당신의 브랜치, `git log`,
-  작업 트리를 절대 건드리지 않습니다. 폴더가 git 저장소가 아니면 MagicTeX 는 그 ref 를 프로젝트
+  작업 트리를 절대 건드리지 않습니다. 폴더가 git 저장소가 아니면 TeXChronicle 는 그 ref 를 프로젝트
   안 `.latex-preview/history.git` 에 있는 자체 저장소에 보관합니다 — 이력이 폴더와 함께 이동하고
   복사되고 삭제되며, 거기서 `git` 을 실행해도 여전히 저장소가 아니라고 나옵니다.

@@ -2,9 +2,9 @@
 
 [English](../ROADMAP.md) · [简体中文](ROADMAP.zh-CN.md) · [日本語](ROADMAP.ja.md) · **한국어** · [Español](ROADMAP.es.md) · [Français](ROADMAP.fr.md) · [Deutsch](ROADMAP.de.md) · [Português](ROADMAP.pt.md)
 
-## 완료: MagicTeX 자체 상태의 안전한 동시 사용
+## 완료: TeXChronicle 자체 상태의 안전한 동시 사용
 
-프로젝트의 `magictex` MCP 서버에 연결하는 Claude Code 세션은 각각 **자신만의 독립된 프로세스**를 띄웁니다(stdio MCP = 클라이언트당 자식 프로세스 하나) — 즉 같은 논문을 다루는 두 세션은 메모리 상태를 전혀 공유하지 않습니다. 지금까지는 둘이 같은 디스크 파일을 두고 경쟁하는 걸 막을 방법이 없었습니다.
+프로젝트의 `texchronicle` MCP 서버에 연결하는 Claude Code 세션은 각각 **자신만의 독립된 프로세스**를 띄웁니다(stdio MCP = 클라이언트당 자식 프로세스 하나) — 즉 같은 논문을 다루는 두 세션은 메모리 상태를 전혀 공유하지 않습니다. 지금까지는 둘이 같은 디스크 파일을 두고 경쟁하는 걸 막을 방법이 없었습니다.
 
 - **크로스 프로세스 락**(`src/lock.ts`) — `.latex-preview/.lock` 위치의 배타적 락 파일. 원자적 생성(`O_EXCL`)으로 획득하며, 실효 복구 기능이 있음(소유 프로세스가 죽었거나 락이 30초 넘게 오래됐으면 자동으로 정리되어, 크래시한 agent가 다른 agent를 영구히 막지 못함).
 - **보호 대상**: `add_comment` / `resolve_comment` / `reply_to_comment` / 거절 후 삭제(`commentsStore.ts`의 모든 변경 함수)와 체크포인트 생성/복원(`createCheckpoint`, `restoreCheckpoint`, `restoreFile`) — 이제 각각의 전체 읽기-수정-쓰기 과정이 배타 제어 없이 이뤄지던 것과 달리 **하나의 크로스 프로세스 임계 구역**으로 실행됩니다.

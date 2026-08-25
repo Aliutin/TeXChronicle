@@ -151,6 +151,50 @@ export async function readTextFile(root: string, rel: string): Promise<string> {
 export interface ResolvedAssetFile { fullPath: string; relativePath: string }
 export interface ResolvedIncludeFile { fullPath: string; relativePath: string; editable: boolean }
 
+/** Remove TeX comments without treating an escaped \% as a comment marker. */
+function withoutTexComments(source: string): string {
+  return source.split(/\r?\n/).map((line) => {
+    for (let i = 0; i < line.length; i += 1) {
+      if (line[i] !== '%') continue;
+      let slashes = 0;
+      for (let j = i - 1; j >= 0 && line[j] === '\\'; j -= 1) slashes += 1;
+      if (slashes % 2 === 0) return line.slice(0, i);
+    }
+    return line;
+  }).join('\n');
+}
+
+interface GraphicsSourcePaths { directories: string[]; references: Set<string> }
+
+const texPathKey = (value: string): string => {
+  const normalized = posix.normalize(value.trim().replace(/\\/g, '/')).replace(/^\.\//, '');
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+};
+
+/** Read the literal paths that graphicx itself uses. Macro-generated paths are
+ * intentionally left to TeX; resolving those correctly requires expansion, not
+ * a misleading approximation. */
+function graphicsPathsFromSource(source: string): GraphicsSourcePaths {
+  const active = withoutTexComments(source);
+  const directories: string[] = [];
+  const references = new Set<string>();
+
+  for (const match of active.matchAll(/\\includegraphics\*?\s*(?:\[[^\]]*\]\s*)?\{([^{}]+)\}/g)) {
+    const value = match[1].trim();
+    if (value && !value.includes('\\')) references.add(texPathKey(value));
+  }
+
+  // A graphicspath body is a list of individually braced directories:
+  // \graphicspath{{./Figures/}{../shared/figures/}}
+  for (const command of active.matchAll(/\\graphicspath\s*\{((?:\s*\{[^{}]*\}\s*)+)\}/g)) {
+    for (const entry of command[1].matchAll(/\{([^{}]*)\}/g)) {
+      const value = entry[1].trim();
+      if (value && !value.includes('\\') && !directories.includes(value)) directories.push(value);
+    }
+  }
+  return { directories, references };
+}
+
 /** A paper is often launched from `repo/paper/draft`, while its TeX source uses
  * `../figures/map.pdf`. Editing and history must remain scoped to `draft`, but a
  * read-only artwork route needs the enclosing repository as its natural safety
@@ -200,32 +244,41 @@ export async function resolveIncludeFile(root: string, rel: string): Promise<Res
   return { fullPath: guarded, relativePath: projectRelative, editable };
 }
 
-/** Resolve an image/PDF for browser display. TeX accepts an omitted graphics
- * extension and papers commonly keep figures beside the selected draft folder.
- * Such sibling assets are allowed only inside the enclosing Git work tree; the
- * existing realpath guard still prevents symlinks from escaping that boundary. */
+/** Resolve an image/PDF for browser display using the same ordinary search
+ * locations as graphicx: the compiler directory, the including source's
+ * directory, and every literal directory declared by \graphicspath. A literal
+ * includegraphics reference may point beyond the normal project/Git boundary;
+ * that exact read-only asset is allowed because the selected TeX source already
+ * names it. Unreferenced browser paths retain the strict boundary. */
 export async function resolveAssetFile(root: string, rel: string, from?: string): Promise<ResolvedAssetFile> {
   const raw = String(rel).trim().replace(/\\/g, '/');
   if (!raw) throw new Error('invalid path');
-  if (posix.isAbsolute(raw) || /^[a-z]:\//i.test(raw)) throw new Error('path outside project');
+  const rawIsAbsolute = posix.isAbsolute(raw) || /^[a-z]:\//i.test(raw);
 
   const boundary = await assetBoundary(root);
   const boundaryAbs = normalize(resolve(boundary));
-  const bases: string[] = [];
-  const addBase = (baseDir: string): void => {
-    const absolute = normalize(resolve(baseDir, raw));
-    if (absolute !== boundaryAbs && !absolute.startsWith(boundaryAbs + sep)) return;
-    const candidate = toPosix(relative(boundaryAbs, absolute));
-    if (candidate && !bases.includes(candidate)) bases.push(candidate);
+  const rootAbs = normalize(resolve(root));
+  const bases: Array<{ absolute: string; outsideAllowed: boolean }> = [];
+  const addAbsolute = (absolutePath: string, outsideAllowed = false): void => {
+    const absolute = normalize(resolve(absolutePath));
+    const insideBoundary = absolute === boundaryAbs || absolute.startsWith(boundaryAbs + sep);
+    if (!insideBoundary && !outsideAllowed) return;
+    const existing = bases.find((base) => base.absolute === absolute);
+    if (existing) {
+      existing.outsideAllowed ||= outsideAllowed;
+      return;
+    }
+    bases.push({ absolute, outsideAllowed });
   };
 
   // Graphics paths are normally relative to the compiler's working directory,
   // which is the selected project root.
-  addBase(root);
+  if (!rawIsAbsolute) addAbsolute(resolve(rootAbs, raw));
 
   // Packages such as import/subfiles make a path relative to an included TeX
   // file. Preserve that useful fallback, but first prove `from` itself is a
-  // regular source path inside the selected project.
+  // regular source path inside the selected project. Reading the source also
+  // lets us honor graphicx's declared search directories.
   if (from) {
     const source = String(from).trim().replace(/\\/g, '/');
     const normalizedSource = posix.normalize(source).replace(/^\.\//, '');
@@ -233,27 +286,58 @@ export async function resolveAssetFile(root: string, rel: string, from?: string)
         !normalizedSource.startsWith('../') && !posix.isAbsolute(normalizedSource) &&
         !/^[a-z]:\//i.test(normalizedSource)) {
       const sourceFull = await guardPath(root, normalizedSource, true);
-      addBase(dirname(sourceFull));
+      // The Live model can briefly refer to an include before the editor has
+      // written that file. Keep the historical source-directory fallback in
+      // that case; only declared graphicspath entries require readable source.
+      const sourceText = await readFile(sourceFull, 'utf8').catch(() => '');
+      const declared = graphicsPathsFromSource(sourceText);
+      const explicitlyReferenced = declared.references.has(texPathKey(raw));
+
+      if (rawIsAbsolute) {
+        addAbsolute(raw, explicitlyReferenced);
+      } else {
+        addAbsolute(resolve(dirname(sourceFull), raw), explicitlyReferenced);
+        for (const graphicsDir of declared.directories) {
+          const directoryIsAbsolute = posix.isAbsolute(graphicsDir) || /^[a-z]:\//i.test(graphicsDir);
+          const compilerBase = directoryIsAbsolute ? graphicsDir : resolve(rootAbs, graphicsDir);
+          addAbsolute(resolve(compilerBase, raw), explicitlyReferenced);
+
+          // import/subfiles users sometimes declare graphicspath relative to the
+          // included file. Trying both mirrors the existing source-dir fallback
+          // while preserving TeX's compiler-directory choice first.
+          if (!directoryIsAbsolute) {
+            addAbsolute(resolve(dirname(sourceFull), graphicsDir, raw), explicitlyReferenced);
+          }
+        }
+      }
     }
   }
   if (!bases.length) throw new Error('path outside project');
 
-  const candidates: string[] = [];
+  const candidates: Array<{ absolute: string; outsideAllowed: boolean }> = [];
   for (const base of bases) {
-    const extension = posix.extname(base);
+    const extension = posix.extname(base.absolute.replace(/\\/g, '/'));
     if (extension) {
-      if (!FIGURE_EXT.test(base)) throw new Error('unsupported asset type');
+      if (!FIGURE_EXT.test(base.absolute)) throw new Error('unsupported asset type');
       candidates.push(base);
     } else {
-      for (const ext of ASSET_EXTENSIONS) candidates.push(base + ext);
+      for (const ext of ASSET_EXTENSIONS) {
+        candidates.push({ absolute: base.absolute + ext, outsideAllowed: base.outsideAllowed });
+      }
     }
   }
 
   for (const candidate of candidates) {
-    const fullPath = await guardPath(boundaryAbs, candidate);
+    const insideBoundary = candidate.absolute !== boundaryAbs && candidate.absolute.startsWith(boundaryAbs + sep);
     try {
+      const fullPath = insideBoundary
+        ? await guardPath(boundaryAbs, toPosix(relative(boundaryAbs, candidate.absolute)))
+        : candidate.outsideAllowed
+          ? normalize(await realpath(candidate.absolute))
+          : null;
+      if (!fullPath) continue;
       const info = await stat(fullPath);
-      if (info.isFile()) return { fullPath, relativePath: candidate };
+      if (info.isFile()) return { fullPath, relativePath: toPosix(relative(rootAbs, fullPath)) };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }

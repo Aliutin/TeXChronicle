@@ -22,7 +22,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
 const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
 
-const proj = mkdtempSync(join(tmpdir(), 'magictex-err-'));
+const proj = mkdtempSync(join(tmpdir(), 'texchronicle-err-'));
 writeFileSync(join(proj, 'main.tex'), [
   String.raw`\documentclass{article}`,
   String.raw`\begin{document}`,
@@ -100,7 +100,7 @@ try {
   // being unactionable, whatever it says.
   check('is more than a single line', note.trim().split('\n').length >= 3);
   check('the console got the error object too',
-    consoleErrors.some((t) => t.includes('[MagicTeX] PDF render failed during')),
+    consoleErrors.some((t) => t.includes('[TeXChronicle] PDF render failed during')),
     'console errors: ' + JSON.stringify(consoleErrors.slice(0, 3)));
 
   // A worker that cannot start must not hang the pane forever.

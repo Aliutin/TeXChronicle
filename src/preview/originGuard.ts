@@ -80,7 +80,7 @@ export function refuseReason(req: IncomingMessage, port: number): string | null 
  *
  * WebSocket handshakes are exempt from the same-origin policy, so any page can
  * open one. Two consequences worth closing: a successful connect confirms which
- * port MagicTeX is on, turning a blind 64k-port spray into a targeted one; and
+ * port TeXChronicle is on, turning a blind 64k-port spray into a targeted one; and
  * the server immediately pushes a `reload` frame naming the user's main file,
  * then narrates their compiles and errors in real time.
  */

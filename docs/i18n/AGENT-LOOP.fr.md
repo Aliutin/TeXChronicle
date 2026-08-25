@@ -65,8 +65,8 @@ La boîte de commentaires a trois états, qui enchaînent tout un cycle de relec
    *Suggested*) :
 
    ```
-   Review my paper using my academic-paper-revision skill
-   (github.com/ZoeLinUTS/Academic-paper-revision). For each issue, call add_comment
+   Review my paper using my installed academic-review skill.
+   For each issue, call add_comment
    with the exact quoted passage and your comment. Don't edit the source yet.
    ```
 
@@ -89,7 +89,7 @@ La boîte de commentaires a trois états, qui enchaînent tout un cycle de relec
 ## Ultra-agents ⚡
 
 > [!CAUTION]
-> C'est la commande la plus puissante de MagicTeX, et la moins supervisée — aucune approbation de
+> C'est la commande la plus puissante de TeXChronicle, et la moins supervisée — aucune approbation de
 > votre part entre les tours, par conception. Lisez toute cette section avant de l'exécuter avec un
 > `depth` élevé.
 

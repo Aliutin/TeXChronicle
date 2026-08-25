@@ -2,7 +2,7 @@
 //
 // previewServer.ts used to locate its static assets at
 // `<pkg-root>/node_modules/<dep>`. That path only exists in a cloned repo. When
-// MagicTeX is installed from npm, npm hoists dependencies to the CONSUMER's
+// TeXChronicle is installed from npm, npm hoists dependencies to the CONSUMER's
 // top-level node_modules, so the engine, pdf.js and diff2html assets all 404 —
 // and because the engine loads lazily on the first render_preview, the server
 // still printed "ready on stdio" and looked fine. Nothing in the suite caught it.

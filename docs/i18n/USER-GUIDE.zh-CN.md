@@ -1,24 +1,24 @@
-# MagicTeX —— 用户手册
+# TeXChronicle —— 用户手册
 
 [English](../USER-GUIDE.md) · **简体中文** · [日本語](USER-GUIDE.ja.md) · [한국어](USER-GUIDE.ko.md) · [Español](USER-GUIDE.es.md) · [Français](USER-GUIDE.fr.md) · [Deutsch](USER-GUIDE.de.md) · [Português](USER-GUIDE.pt.md)
 
-![MagicTeX 工作区](../images/workspace.png)
+![TeXChronicle 工作区](../images/workspace.png)
 
 ## 日常使用
 
 1. 把 server 加到论文项目的 `.mcp.json`(见 README),重启 Claude Code。
    或者安装插件用 slash 命令(见下)。
-2. 让 Claude *"render a preview"*(或运行 `/magic-latex`)。**工作区**会打开:左边是
+2. 让 Claude *"render a preview"*(或运行 `/texchronicle`)。**工作区**会打开:左边是
    **文件树 + 源码编辑器**,中间是**实时 PDF**,右边是 **Comments**(用顶栏的 💬 **Comments** 按钮切换)。
 3. 从此 PDF 保持实时。你自己编辑器的保存和 Claude 的修改都会自动重新编译;
    在内置编辑器里按 **Ctrl+S** / **Recompile** 才重新编译(它每 30 秒自动保存你的工作,但不重新编译)。
 
 ## Slash 命令(插件)
 
-安装一次 —— `/plugin marketplace add ZoeLinUTS/MagicTeX-mcp` 然后 `/plugin install magictex` ——
+安装一次 —— `/plugin marketplace add Aliutin/TeXChronicle` 然后 `/plugin install texchronicle` ——
 就能用最少的打字量驱动它:
 
-- **`/magic-latex`** —— 编译并打开工作区。
+- **`/texchronicle`** —— 编译并打开工作区。
 - **`/ai-review [skill]`** —— 用某个 skill 审阅论文(默认 `academic-paper-revision`,
   任意 skill 名都行),留下评论供你接受。
 - **`/address-comments`** —— 解决你已接受的评论(可循环:`/loop 60s /address-comments`)。
@@ -76,7 +76,7 @@
 
 高亮是根据 pdf.js 那层看不见的*文字层*画出来的(和选中文字用的是同一套几何信息),它对字形在画布上
 实际绘制位置是按行做的近似——所以框可能差那么一点点,放大时更明显。这个小偏移是固有的,纯视觉问题。
-为了避免以前那种"Claude 改完一段、PDF 重排后高亮大幅漂移"的情况,MagicTeX 会在**每次重新编译时把
+为了避免以前那种"Claude 改完一段、PDF 重排后高亮大幅漂移"的情况,TeXChronicle 会在**每次重新编译时把
 高亮重新锚定到当前文字上**(通过匹配评论引文的首尾短语),而不是钉死在旧坐标上——所以即使中间的词
 被改了,高亮也会跟着文字走。如果一段被删掉或改得面目全非,高亮会退回到它最后已知的位置。
 
@@ -155,6 +155,6 @@ WASM 引擎自带的是 TeX Live 的一个**子集**(basic + recommended + extra
 - 编译出的 PDF 是对 Overleaf 产物的近似(通过 WASM 的一个当前版本 TeX Live),不保证逐位一致。
   对绝大多数论文来说是准确的;最终一定要在你的目标平台(Overleaf 或投稿系统)上做一次最终编译。
 - 修改历史存放在一个隐藏的 git ref(`refs/latex-preview/checkpoints`)里,永远不碰你的分支、
-  `git log` 或工作树。如果这个文件夹不是 git 仓库,MagicTeX 会把那条 ref 放在项目内
+  `git log` 或工作树。如果这个文件夹不是 git 仓库,TeXChronicle 会把那条 ref 放在项目内
   `.latex-preview/history.git` 这个属于它自己的仓库里——所以历史会跟着文件夹一起移动、复制和删除,
   而在那里运行 `git` 依然会说这不是一个仓库。

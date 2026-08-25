@@ -1,15 +1,15 @@
 {
-  "name": "magictex",
+  "name": "texchronicle",
   "owner": {
-    "name": "ZoeLinUTS",
-    "url": "https://github.com/ZoeLinUTS"
+    "name": "Aliutin",
+    "url": "https://github.com/Aliutin"
   },
-  "description": "MagicTeX — an Overleaf-like LaTeX workspace for Claude Code, with no local TeX install required.",
+  "description": "TeXChronicle — a section-aware LaTeX history and editing workspace, with no local TeX install required.",
   "plugins": [
     {
-      "name": "magictex",
+      "name": "texchronicle",
       "source": "./",
-      "description": "LaTeX editor for AI agents: live PDF preview, PDF comments that become edit instructions, a Visual (WYSIWYG) mode, and git-tracked history. Commands: /magic-latex, /ai-review, /address-comments, /ultra-agents, plus one per MCP tool."
+      "description": "LaTeX workspace for people and AI agents: editable live prose, exact PDF preview, anchored comments, and section-aware Git history. Commands: /texchronicle, /ai-review, /address-comments, /ultra-agents, plus one per MCP tool."
     }
   ]
 }

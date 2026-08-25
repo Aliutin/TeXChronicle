@@ -2,9 +2,9 @@
 
 [English](../ROADMAP.md) · **简体中文** · [日本語](ROADMAP.ja.md) · [한국어](ROADMAP.ko.md) · [Español](ROADMAP.es.md) · [Français](ROADMAP.fr.md) · [Deutsch](ROADMAP.de.md) · [Português](ROADMAP.pt.md)
 
-## 已实现:MagicTeX 自身状态的安全并发使用
+## 已实现:TeXChronicle 自身状态的安全并发使用
 
-每个连接到项目 `magictex` MCP server 的 Claude Code 会话都会启动**自己独立的进程**(stdio MCP = 每个客户端一个子进程)——所以两个会话同时改同一篇论文,内存里没有任何共享状态。原本没有任何机制阻止它们在同一批磁盘文件上互相竞争。
+每个连接到项目 `texchronicle` MCP server 的 Claude Code 会话都会启动**自己独立的进程**(stdio MCP = 每个客户端一个子进程)——所以两个会话同时改同一篇论文,内存里没有任何共享状态。原本没有任何机制阻止它们在同一批磁盘文件上互相竞争。
 
 - **跨进程锁**(`src/lock.ts`)——在 `.latex-preview/.lock` 位置的排他锁文件,通过原子创建(`O_EXCL`)获取,带失效恢复(持有者进程已死,或锁存在超过 30 秒,会被自动清除,这样崩溃的 agent 不会永久卡住其他人)。
 - **保护的范围**:`add_comment` / `resolve_comment` / `reply_to_comment` / 拒绝并删除(`commentsStore.ts` 所有的写操作)以及 checkpoint 的创建/恢复(`createCheckpoint`、`restoreCheckpoint`、`restoreFile`)——现在整个"读-改-写"过程都作为**一个跨进程的临界区**运行,而不是读→改→写之间毫无互斥。

@@ -10,6 +10,7 @@ node_modules/
 
 # Build / scratch artifacts
 dist/
+/dist-portable/
 *.pdf
 *.png
 !docs/images/*.png

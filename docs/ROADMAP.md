@@ -2,9 +2,9 @@
 
 **English** · [简体中文](i18n/ROADMAP.zh-CN.md) · [日本語](i18n/ROADMAP.ja.md) · [한국어](i18n/ROADMAP.ko.md) · [Español](i18n/ROADMAP.es.md) · [Français](i18n/ROADMAP.fr.md) · [Deutsch](i18n/ROADMAP.de.md) · [Português](i18n/ROADMAP.pt.md)
 
-## Shipped: safe concurrent use of MagicTeX's own state
+## Shipped: safe concurrent use of TeXChronicle's own state
 
-Each Claude Code session that connects to a project's `magictex` MCP server spawns
+Each Claude Code session that connects to a project's `texchronicle` MCP server spawns
 its **own separate process** (stdio MCP = one child process per client) — so two
 sessions working on the same paper share no in-memory state. Nothing stopped two
 of them from racing on the same on-disk files.

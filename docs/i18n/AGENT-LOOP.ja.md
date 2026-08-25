@@ -63,8 +63,8 @@ If there are no accepted comments, do nothing this pass.
    *Suggested* セクションのカード）：
 
    ```
-   Review my paper using my academic-paper-revision skill
-   (github.com/ZoeLinUTS/Academic-paper-revision). For each issue, call add_comment
+   Review my paper using my installed academic-review skill.
+   For each issue, call add_comment
    with the exact quoted passage and your comment. Don't edit the source yet.
    ```
 
@@ -86,7 +86,7 @@ If there are no accepted comments, do nothing this pass.
 ## Ultra-agents ⚡
 
 > [!CAUTION]
-> これは MagicTeX で最も強力なコマンドであり、最も監督が少ないコマンドでもあります——設計上、
+> これは TeXChronicle で最も強力なコマンドであり、最も監督が少ないコマンドでもあります——設計上、
 > ラウンドごとのあなたの承認はありません。大きな `depth` で実行する前に、このセクションを
 > 最後まで読んでください。
 

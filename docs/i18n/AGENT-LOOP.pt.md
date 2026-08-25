@@ -63,8 +63,8 @@ A caixa de comentários tem três estados, que encadeiam um ciclo de revisão in
    **sugestão** (destaque roxo tracejado no PDF, um cartão na seção *Suggested*):
 
    ```
-   Review my paper using my academic-paper-revision skill
-   (github.com/ZoeLinUTS/Academic-paper-revision). For each issue, call add_comment
+   Review my paper using my installed academic-review skill.
+   For each issue, call add_comment
    with the exact quoted passage and your comment. Don't edit the source yet.
    ```
 
@@ -85,7 +85,7 @@ A caixa de comentários tem três estados, que encadeiam um ciclo de revisão in
 ## Ultra-agents ⚡
 
 > [!CAUTION]
-> Este é o comando mais poderoso do MagicTeX e o menos supervisionado — sem aprovação sua entre as
+> Este é o comando mais poderoso do TeXChronicle e o menos supervisionado — sem aprovação sua entre as
 > rodadas, por design. Leia esta seção inteira antes de executá-lo com um `depth` alto.
 
 `/ultra-agents [skill] [depth]` remove por completo o aval humano do passo 2 — o revisor publica cada

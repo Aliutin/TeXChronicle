@@ -1,36 +1,24 @@
-# MagicTeX — AI エージェントのための LaTeX エディタ
+# TeXChronicle — AI エージェントのための LaTeX エディタ
 
 <!-- badges -->
-[![npm](https://img.shields.io/npm/v/magictex-mcp?logo=npm)](https://www.npmjs.com/package/magictex-mcp)
-[![MCP registry](https://img.shields.io/badge/MCP%20registry-io.github.ZoeLinUTS%2Fmagictex-6f42c1)](https://registry.modelcontextprotocol.io)
-[![CI](https://github.com/ZoeLinUTS/MagicTeX-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ZoeLinUTS/MagicTeX-mcp/actions/workflows/ci.yml)
-[![stars](https://img.shields.io/github/stars/ZoeLinUTS/MagicTeX-mcp?style=flat)](https://github.com/ZoeLinUTS/MagicTeX-mcp/stargazers)
-[![last commit](https://img.shields.io/github/last-commit/ZoeLinUTS/MagicTeX-mcp)](https://github.com/ZoeLinUTS/MagicTeX-mcp/commits/main)
 [![license](https://img.shields.io/badge/license-AGPL--3.0-blue)](../../LICENSE)
-[![Sponsor](https://img.shields.io/badge/%E2%9D%A4-Sponsor-db61a2)](https://github.com/sponsors/ZoeLinUTS)
+
+> The product name is current, but this translation still contains pre-release installation details. See the [English README](../../README.md) for the current portable/source setup and publishing status.
 
 [English](../../README.md) · [简体中文](README.zh-CN.md) · **日本語** · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md)
 
-![MagicTeX workspace](../images/workspace.png)
+![TeXChronicle workspace](../images/workspace.png)
 
-**MagicTeX** は **AI エージェントのために作られた LaTeX エディタ**です。MCP サーバー経由で
+**TeXChronicle** は **AI エージェントのために作られた LaTeX エディタ**です。MCP サーバー経由で
 Claude Code に接続する、Overleaf ライクな**ワンウィンドウ・ワークスペース**で、
 **ローカルの TeX インストールも Overleaf アカウントも不要**：ライブ PDF プレビュー、
 **ビジュアル（WYSIWYG）モード**付きのソースエディタ、変更履歴、そして
 **レンダリング後の PDF 上にアンカーしたコメントが、そのままエージェントへの編集指示になります**。
-（npm パッケージ名：`magictex-mcp`）
+（npm パッケージ名：`texchronicle`）
 
 ヘッドレスブラウザ内で動く WASM TeX Live 2026 エンジン
 （[texlyre-busytex](https://github.com/TeXlyre/texlyre-busytex)）でコンパイルするため、
 数 GB のインストールは不要——一度きりの WASM アセットのダウンロードだけです。
-
-## インストール前に見てみる
-
-**[zoelin.dev/tools/magictex](https://zoelin.dev/tools/magictex)** に、コメント → エージェントの
-ループを段階的にたどるウォークスルーがあります。内容はすべて実際のツール出力から作られています。
-これはリプレイであり、ホストされたインスタンスではありません——TeX エンジンは約 650 MB の
-一回きりのダウンロードで、エージェントの半分は Claude そのものなので、MagicTeX はウェブページの
-中ではなく、あなたのプロジェクトの隣で動きます。
 
 ## ワークスペース
 
@@ -89,9 +77,9 @@ Claude Code に接続する、Overleaf ライクな**ワンウィンドウ・ワ
 
 ## セットアップ
 
-MagicTeX は npm では [`magictex-mcp`](https://www.npmjs.com/package/magictex-mcp)、
+TeXChronicle は npm では [`texchronicle`](https://www.npmjs.com/package/texchronicle)、
 [公式 MCP レジストリ](https://registry.modelcontextprotocol.io) には
-**`io.github.ZoeLinUTS/magictex`** として登録されています——レジストリを読むクライアントなら
+**`io.github.Aliutin/texchronicle`** として登録されています——レジストリを読むクライアントなら
 どれでも見つけられます。クローンするものはなく、TeX のインストールも不要。`npx` が初回に
 取得します。
 
@@ -100,7 +88,7 @@ MagicTeX は npm では [`magictex-mcp`](https://www.npmjs.com/package/magictex-
    ```json
    {
      "mcpServers": {
-       "magictex": { "command": "npx", "args": ["-y", "magictex-mcp"] }
+       "texchronicle": { "command": "npx", "args": ["-y", "texchronicle"] }
      }
    }
    ```
@@ -111,26 +99,26 @@ MagicTeX は npm では [`magictex-mcp`](https://www.npmjs.com/package/magictex-
    以降の編集は自動でリロードされます。
 
    クローンからローカル開発する場合は、代わりにソースを指してください：
-   `"command": "npx", "args": ["tsx", "/絶対パス/magictex-mcp/src/server.ts"]`
+   `"command": "npx", "args": ["tsx", "/絶対パス/texchronicle/src/server.ts"]`
 
 WASM アセットはこのリポジトリには**含まれていません**。初回実行時に**ユーザーごとの**
-キャッシュへ取得されます——macOS は `~/Library/Caches/magictex`、Linux は
-`$XDG_CACHE_HOME/magictex`、Windows は `%LOCALAPPDATA%\magictex`。そのため MagicTeX を
+キャッシュへ取得されます——macOS は `~/Library/Caches/texchronicle`、Linux は
+`$XDG_CACHE_HOME/texchronicle`、Windows は `%LOCALAPPDATA%\texchronicle`。そのため TeXChronicle を
 更新しても再ダウンロードは起きず、チェックアウト・グローバルインストール・`npx` 実行が
-1 つのコピーを共有します。`MAGICTEX_ASSETS_DIR` で場所を変更できます。事前取得は
+1 つのコピーを共有します。`TEXCHRONICLE_ASSETS_DIR` で場所を変更できます。事前取得は
 `npx texlyre-busytex download-assets <そのディレクトリ>`。
 
 ## Claude Code プラグインとして導入（スラッシュコマンド）
 
-タイピングを減らすには、MagicTeX をプラグインとして導入——1 回のインストールで MCP サーバーと
+タイピングを減らすには、TeXChronicle をプラグインとして導入——1 回のインストールで MCP サーバーと
 スラッシュコマンドの両方が手に入ります：
 
 ```
-/plugin marketplace add ZoeLinUTS/MagicTeX-mcp
-/plugin install magictex
+/plugin marketplace add Aliutin/TeXChronicle
+/plugin install texchronicle
 ```
 
-- **`/magic-latex`** — コンパイルしてワークスペースを開く。
+- **`/texchronicle`** — コンパイルしてワークスペースを開く。
 - **`/ai-review [skill]`** — スキルで論文を査読（既定は `academic-paper-revision`、
   任意のスキル名も可）し、承認用のコメントを投稿。未導入のスキルは案内を表示。
 - **`/address-comments`** — 承認済みコメントを解決（`/loop 60s /address-comments` も可）。
@@ -156,7 +144,7 @@ WASM アセットはこのリポジトリには**含まれていません**。�
 
 必ずしも打つ必要はありません——普通の日本語でも動きます（「プレビューを表示」「コメントに対応して」）。コマンドは速くて教えやすい省略形です。
 
-> プラグインには MCP サーバー（`npx magictex-mcp`）が同梱されているので、プラグインを
+> プラグインには MCP サーバー（`npx texchronicle`）が同梱されているので、プラグインを
 > 入れればそれだけで足ります——上の `.mcp.json` は「プラグインを入れたくない」場合の
 > 代替手段です。スラッシュコマンドはどちらでも動きます。
 
@@ -174,7 +162,7 @@ MCP を話すあらゆるクライアント向けのインターフェース層�
 | `show_diff` | `checkpoint?` | 並列 diff を**画像**として描画し、会話内にインライン表示。既定は未コミットの変更、checkpoint の sha を渡せばその保存版。 |
 | `list_checkpoints` | `limit?`（既定 10、最大 50） | 最近の checkpoint と sha を新しい順に一覧——`show_diff` に渡すものを探すために使う。 |
 
-**看板機能はこれらの上に構築されており、この表の中にはありません。** `/magic-latex`・`/ai-review`・`/address-comments`・⚡ `/ultra-agents` は Claude Code の**プラグインコマンド**で、上の各ツールを組み立てて動かします——`/ultra-agents` は「レビュー → 自動承認 → 修正」を許可したラウンド数だけ連鎖させるもので、`add_comment` の `accepted` はそのために存在します。MCP のインターフェース層には含まれないため、他の MCP クライアントからはこの 7 つだけが見えます。上のプラグイン節と [docs/AGENT-LOOP.ja.md](AGENT-LOOP.ja.md) を参照。
+**看板機能はこれらの上に構築されており、この表の中にはありません。** `/texchronicle`・`/ai-review`・`/address-comments`・⚡ `/ultra-agents` は Claude Code の**プラグインコマンド**で、上の各ツールを組み立てて動かします——`/ultra-agents` は「レビュー → 自動承認 → 修正」を許可したラウンド数だけ連鎖させるもので、`add_comment` の `accepted` はそのために存在します。MCP のインターフェース層には含まれないため、他の MCP クライアントからはこの 7 つだけが見えます。上のプラグイン節と [docs/AGENT-LOOP.ja.md](AGENT-LOOP.ja.md) を参照。
 
 ## ターミナルでの見え方
 
@@ -184,7 +172,7 @@ MCP を話すあらゆるクライアント向けのインターフェース層�
 
 あなたが入力：
 ```
-/magic-latex
+/texchronicle
 ```
 Claude が `render_preview` を呼び、こう返します：
 ```
@@ -273,7 +261,7 @@ flowchart LR
   3 つのパッケージセットに分かれています（basic 87 MB、recommended 190 MB、extra 324 MB、
   加えてエンジン 31 MB）。通常の論文が*読み込む*のは basic だけで、残り 2 つは必要になるまで
   ディスクに置かれたままです。インストールごとではなくユーザーごとのキャッシュなので、
-  MagicTeX を更新しても再ダウンロードは起きません。場所は `MAGICTEX_ASSETS_DIR` で変更できます。
+  TeXChronicle を更新しても再ダウンロードは起きません。場所は `TEXCHRONICLE_ASSETS_DIR` で変更できます。
 - **ローカルの TeX ディストリビューションは任意です。** 必要になる場面は次の通り。
 
 ### ローカルの TeX ディストリビューションは必要？
@@ -284,7 +272,7 @@ flowchart LR
 ときは黙って誤った PDF を返すのではなく、その旨を通知します。
 
 Overleaf と完全に一致する出力が必要になったらインストールしてください。
-MagicTeX が自動的に検出します。設定は不要です：
+TeXChronicle が自動的に検出します。設定は不要です：
 
 | | |
 |---|---|
@@ -292,7 +280,7 @@ MagicTeX が自動的に検出します。設定は不要です：
 | Linux | `texlive-full` |
 | Windows | [TeX Live](https://tug.org/texlive/), or [MiKTeX](https://miktex.org/) **plus** [Strawberry Perl](https://strawberryperl.com/) |
 
-> MagicTeX が `PATH` 上で探すのは `latexmk` ですが、これは単体でインストール
+> TeXChronicle が `PATH` 上で探すのは `latexmk` ですが、これは単体でインストール
 > するものではなく、上記ディストリビューションに含まれるドライバスクリプトです。
 > 確認は `which latexmk` ではなく **`latexmk -version`** で行ってください。
 > `latexmk` は Perl スクリプトで、MiKTeX は `latexmk.exe` を `PATH` に置く一方で
@@ -345,20 +333,11 @@ typecheck ＋ UI ビルド ＋ このスイートを実行します。
 参照）——本当の意味での並列 multi-agent 編集（reviewer / author / defender がそれぞれの
 git ブランチで作業し、最後にマージして戻す）が次のマイルストーンです。
 
-## このプロジェクトを支援
-
-MagicTeX は無料のオープンソース（AGPL-3.0）です。論文作業の時間を節約できたなら、ぜひ
-**[このプロジェクトを支援](https://github.com/sponsors/ZoeLinUTS)**してください。リポジトリへの
-⭐ も励みになります。
-
 ## 謝辞
 
-MagicTeX は [Zoe Lin](https://zoelin.dev) が開発・保守しています。**[Claude Code](https://claude.com/claude-code)** を使って作られました。
+TeXChronicle began as a fork of [MagicTeX MCP](https://github.com/ZoeLinUTS/MagicTeX-mcp) by Zoe Lin and contributors, and has since been substantially redesigned around human-first editing and section-level history. See [NOTICE.md](../../NOTICE.md) for provenance.
 
-Knuth が自分の本の見栄えを受け入れる代わりに 10 年かけて自ら組版システムを作った
-——このプロジェクトが今も向き合い続けている物語——を教えてくれた **David Turnbull**
-に感謝します。そして [`texlyre-busytex`](https://github.com/TeXlyre/texlyre-busytex) のメンテナの皆さんへ。あの WASM 版 TeX Live なしには、
-そもそもローカルで何ひとつ動きませんでした。
+Thanks also to the maintainers of [texlyre-busytex](https://github.com/TeXlyre/texlyre-busytex), whose WASM TeX Live engine powers the bundled compiler.
 
 ## ライセンス
 

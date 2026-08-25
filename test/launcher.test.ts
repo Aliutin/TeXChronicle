@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { resolve } from 'node:path';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { pickerPlans, recentProjectsPickerPlan, resolveLaunchTarget } from '../src/launcher.js';
+import { canonicalizeLaunchTarget, inferLaunchTarget, pickerPlans, recentProjectsPickerPlan, resolveLaunchTarget } from '../src/launcher.js';
 import { windowsLauncherPlan } from '../src/installLauncher.js';
 
 const run = promisify(execFile);
@@ -32,33 +34,82 @@ test('a main file outside an explicit project is rejected', () => {
 test('Windows picker passes the initial directory through the environment, not shell quoting', () => {
   const initial = resolve('C:/Users/A Person/My Papers');
   const [plan] = pickerPlans('win32', initial);
-  assert.equal(plan.env?.MAGICTEX_PICKER_DIR, initial);
+  assert.equal(plan.env?.TEXCHRONICLE_PICKER_DIR, initial);
+  assert.equal(plan.windowsHide, false, 'the interactive WinForms picker would be created but invisible');
   assert.ok(plan.args.includes('-STA'));
   assert.doesNotMatch(plan.args.join(' '), /A Person[\\/]My/);
 });
 
-test('desktop shortcut launches this exact Node and CLI without PATH lookup', () => {
-  const plan = windowsLauncherPlan('C:\\Program Files\\nodejs\\node.exe', 'C:\\Magic TeX\\bin\\cli.mjs');
-  assert.equal(plan.env.MAGICTEX_NODE, 'C:\\Program Files\\nodejs\\node.exe');
-  assert.equal(plan.env.MAGICTEX_CLI, 'C:\\Magic TeX\\bin\\cli.mjs');
+test('desktop shortcut uses a durable shim with the exact install as an offline fallback', () => {
+  const plan = windowsLauncherPlan('C:\\Program Files\\nodejs\\node.exe', 'C:\\TeX Chronicle\\bin\\cli.mjs');
+  assert.equal(plan.env.TEXCHRONICLE_NODE, 'C:\\Program Files\\nodejs\\node.exe');
+  assert.equal(plan.env.TEXCHRONICLE_CLI, 'C:\\TeX Chronicle\\bin\\cli.mjs');
   assert.match(plan.args.at(-1) ?? '', /CreateShortcut/);
   assert.match(plan.args.at(-1) ?? '', /open --desktop/);
+  assert.match(plan.args.at(-1) ?? '', /launch\.cmd/);
+  assert.match(plan.args.at(-1) ?? '', /where texchronicle/);
+  assert.match(plan.args.at(-1) ?? '', /WindowStyle = 7/);
+  assert.match(plan.args.at(-1) ?? '', /Startup failed with exit code/);
 });
 
 test('Windows recent-project chooser reads its index through the environment', () => {
-  const recents = resolve('C:/Users/A Person/App Data/MagicTeX/recent-projects.json');
+  const recents = resolve('C:/Users/A Person/App Data/TeXChronicle/recent-projects.json');
   const plan = recentProjectsPickerPlan(resolve('C:/Users/A Person/Documents'), recents);
-  assert.equal(plan.env?.MAGICTEX_RECENTS_FILE, recents);
+  assert.equal(plan.env?.TEXCHRONICLE_RECENTS_FILE, recents);
+  assert.equal(plan.windowsHide, false, 'the Recent Projects form would inherit a hidden startup window');
   assert.doesNotMatch(plan.args.join(' '), /A Person/);
   assert.match(plan.args.at(-1) ?? '', /Recent projects/);
   assert.match(plan.args.at(-1) ?? '', /DoubleClick/);
   assert.match(plan.args.at(-1) ?? '', /Browse/);
+  assert.match(plan.args.at(-1) ?? '', /Get-Content -Raw -Encoding UTF8/);
+  assert.match(plan.args.at(-1) ?? '', /OpenStandardOutput/);
+  assert.match(plan.args.at(-1) ?? '', /TopMost = \$true/);
+});
+
+test('browsing to a nested main file reuses the marked project root', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'texchronicle-launch-root-'));
+  try {
+    mkdirSync(join(root, '.latex-preview'));
+    mkdirSync(join(root, 'src'));
+    const main = join(root, 'src', 'main.tex');
+    writeFileSync(main, '\\documentclass{article}\n');
+    const target = await inferLaunchTarget(tmpdir(), main);
+    assert.equal(target.projectRoot, root);
+    assert.equal(target.mainFile, 'src/main.tex');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('canonical launch keeps extensionless main-file shorthand', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'texchronicle-launch-extensionless-'));
+  try {
+    writeFileSync(join(root, 'paper.tex'), '\\documentclass{article}\n');
+    const target = await canonicalizeLaunchTarget({ projectRoot: root, mainFile: 'paper' });
+    assert.equal(target.mainFile, 'paper.tex');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('canonical launch containment rejects a junction escaping the project', async (t) => {
+  const base = mkdtempSync(join(tmpdir(), 'texchronicle-launch-link-'));
+  const root = join(base, 'paper');
+  const outside = join(base, 'outside');
+  try {
+    mkdirSync(root);
+    mkdirSync(outside);
+    writeFileSync(join(outside, 'main.tex'), '\\documentclass{article}\n');
+    try { symlinkSync(outside, join(root, 'linked'), process.platform === 'win32' ? 'junction' : 'dir'); }
+    catch (error) { t.skip(`cannot create a directory link on this machine: ${(error as Error).message}`); return; }
+    await assert.rejects(
+      () => canonicalizeLaunchTarget({ projectRoot: root, mainFile: 'linked/main.tex' }),
+      /real project root/,
+    );
+  } finally { rmSync(base, { recursive: true, force: true }); }
 });
 
 test('Windows can construct and close the real Recent Projects window', { skip: process.platform !== 'win32' }, async () => {
   const plan = recentProjectsPickerPlan(process.cwd(), resolve('missing-recents.json'));
   const { stdout } = await run(plan.command, plan.args, {
-    env: { ...plan.env, MAGICTEX_PICKER_AUTOCLOSE: '1' },
+    cwd: tmpdir(),
+    env: { ...plan.env, TEXCHRONICLE_PICKER_AUTOCLOSE: '1' },
     windowsHide: true,
     timeout: 10_000,
   });

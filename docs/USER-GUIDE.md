@@ -1,14 +1,14 @@
-# MagicTeX — User guide
+# TeXChronicle — User guide
 
 **English** · [简体中文](i18n/USER-GUIDE.zh-CN.md) · [日本語](i18n/USER-GUIDE.ja.md) · [한국어](i18n/USER-GUIDE.ko.md) · [Español](i18n/USER-GUIDE.es.md) · [Français](i18n/USER-GUIDE.fr.md) · [Deutsch](i18n/USER-GUIDE.de.md) · [Português](i18n/USER-GUIDE.pt.md)
 
-![The MagicTeX workspace](images/workspace.png)
+![The TeXChronicle workspace](images/workspace.png)
 
 ## Everyday use
 
 1. Add the server to your paper project's `.mcp.json` (see the README), restart Claude Code.
    Or install the plugin for slash commands (below).
-2. Ask your connected agent to *"render a preview"* (or run `/magic-latex`). The **workspace** opens: a
+2. Ask your connected agent to *"render a preview"* (or run `/texchronicle`). The **workspace** opens: a
    top-level view switch gives **Code**, a source-preserving **Live visual editor**, the exact compiled
    **PDF**, and **Split** for source + PDF together. **History** is beside them; toggle
    💬 **Comments** in the top bar whenever you need the review drawer.
@@ -22,10 +22,10 @@
 
 ## Slash commands (plugin)
 
-Install once — `/plugin marketplace add ZoeLinUTS/MagicTeX-mcp` then `/plugin install magictex` —
+Install once — `/plugin marketplace add Aliutin/TeXChronicle` then `/plugin install texchronicle` —
 and drive it with minimal typing:
 
-- **`/magic-latex`** — compile and open the workspace.
+- **`/texchronicle`** — compile and open the workspace.
 - **`/ai-review [skill]`** — review the paper with a skill (default `academic-paper-revision`;
   any skill name works) and post comments for you to accept.
 - **`/address-comments`** — resolve your accepted comments (loop it: `/loop 60s /address-comments`).
@@ -89,7 +89,7 @@ clear as you go instead of piling up. **clear all** closes them in bulk.
 Highlights are drawn from pdf.js's invisible *text layer* (the same geometry used for selection),
 which is a per-line approximation of where the glyphs are painted on the canvas — so a box can be a
 hair off, more visible when zoomed in. That small offset is inherent and cosmetic. To avoid the
-larger drift that used to happen after Claude edited a passage and the PDF reflowed, MagicTeX
+larger drift that used to happen after Claude edited a passage and the PDF reflowed, TeXChronicle
 **re-anchors each highlight onto the current text** on every recompile (matching the comment's
 quoted head and tail phrases) rather than pinning it to old coordinates — so it follows the text
 even when the words in the middle changed. If a passage is deleted or rewritten past recognition,
@@ -150,7 +150,7 @@ drafts or supplements kept in the same folder are not mixed into it.
   edited subsections. **+ subsections** compares its complete subtree.
 - **View PDF** opens the exact PDF saved when that source checkpoint rendered; **Back to latest**
   returns to the live preview.
-- **Restore section** replaces only that section and its subsections. MagicTeX checkpoints the
+- **Restore section** replaces only that section and its subsections. TeXChronicle checkpoints the
   current project first, so the restore itself is reversible. Use **Whole project** when you
   really want a full checkpoint diff or restore.
 
@@ -220,8 +220,8 @@ is an approximation.
   a final compile on your target (Overleaf or your submission system).
 - Change history is stored under a hidden git ref (`refs/latex-preview/checkpoints`) and never
   touches your branches, `git log`, or working tree. If the folder isn't a git repository,
-  MagicTeX keeps that ref in a repository of its own at `.latex-preview/history.git` inside the
+  TeXChronicle keeps that ref in a repository of its own at `.latex-preview/history.git` inside the
   project — so the history moves, copies and is deleted with the folder, and `git` run there still
   reports no repository.
 - Historical PDFs are stored separately under `.latex-preview/renders/`, keyed by checkpoint SHA,
-  and are not added to either your Git history or MagicTeX's hidden source history.
+  and are not added to either your Git history or TeXChronicle's hidden source history.

@@ -64,8 +64,8 @@ La bandeja de comentarios tiene tres estados, que encadenan un ciclo de revisió
    **sugerencia** (resaltado morado discontinuo en el PDF, una tarjeta en la sección *Suggested*):
 
    ```
-   Review my paper using my academic-paper-revision skill
-   (github.com/ZoeLinUTS/Academic-paper-revision). For each issue, call add_comment
+   Review my paper using my installed academic-review skill.
+   For each issue, call add_comment
    with the exact quoted passage and your comment. Don't edit the source yet.
    ```
 
@@ -88,7 +88,7 @@ La bandeja de comentarios tiene tres estados, que encadenan un ciclo de revisió
 ## Ultra-agents ⚡
 
 > [!CAUTION]
-> Este es el comando más potente de MagicTeX, y el menos supervisado — sin aprobación tuya entre
+> Este es el comando más potente de TeXChronicle, y el menos supervisado — sin aprobación tuya entre
 > rondas, por diseño. Lee esta sección entera antes de ejecutarlo con un `depth` alto.
 
 `/ultra-agents [skill] [depth]` elimina por completo el visto bueno humano del paso 2 — el revisor

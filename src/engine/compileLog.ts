@@ -116,7 +116,7 @@ export function classifyCompile(log: string, pdfLen: number): CompileVerdict {
 export function stubPackage(name: string): string {
   return [
     `\\NeedsTeXFormat{LaTeX2e}`,
-    `\\ProvidesPackage{${name}}[0000/00/00 stub injected by MagicTeX]`,
+    `\\ProvidesPackage{${name}}[0000/00/00 stub injected by TeXChronicle]`,
     `% The bundled TeX Live subset has no ${name}.sty. Nothing in this document`,
     `% appeared to use it, so it is stubbed out rather than halting the compile.`,
     `% For full package fidelity, compile with backend: "system".`,

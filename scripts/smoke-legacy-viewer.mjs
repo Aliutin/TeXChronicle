@@ -30,7 +30,7 @@ const check = (name, ok, detail = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${!ok && detail ? `\n      ${detail}` : ''}`);
 };
 
-const proj = mkdtempSync(join(tmpdir(), 'magictex-legacy-'));
+const proj = mkdtempSync(join(tmpdir(), 'texchronicle-legacy-'));
 writeFileSync(join(proj, 'main.tex'), [
   String.raw`\documentclass{article}`,
   String.raw`\begin{document}`,

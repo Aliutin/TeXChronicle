@@ -14,7 +14,7 @@ import { collectProjectFiles, countProjectFiles } from '../src/project/collectPr
 // The count is now taken separately, which is only safe while the two agree.
 
 function project(): string {
-  const root = mkdtempSync(join(tmpdir(), 'magictex-size-'));
+  const root = mkdtempSync(join(tmpdir(), 'texchronicle-size-'));
   writeFileSync(join(root, 'main.tex'), '\\documentclass{article}\\begin{document}hi\\end{document}\n');
   writeFileSync(join(root, 'refs.bib'), '@article{a,title={T}}\n');
   mkdirSync(join(root, 'figures'));

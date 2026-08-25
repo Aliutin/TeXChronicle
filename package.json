@@ -1,12 +1,12 @@
 {
-  "name": "magictex-mcp",
-  "mcpName": "io.github.ZoeLinUTS/magictex",
-  "version": "0.1.10",
-  "description": "MagicTeX — a universal LaTeX workspace for people and MCP-compatible AI agents: source-preserving visual editing, exact live PDF, anchored PDF comments, and git-backed section history. Compiles your .tex with a WASM TeX Live engine in a headless browser — no local TeX install, no Overleaf account.",
+  "name": "texchronicle",
+  "mcpName": "io.github.Aliutin/texchronicle",
+  "version": "0.1.12",
+  "description": "TeXChronicle — a universal LaTeX workspace with source-preserving visual editing, exact live PDF, anchored comments, and git-backed section history. Works directly or with MCP-compatible AI agents, with no local TeX install or Overleaf account required.",
   "type": "module",
   "license": "AGPL-3.0-or-later",
   "keywords": [
-    "magictex",
+    "texchronicle",
     "latex",
     "tex",
     "texlive",
@@ -27,20 +27,19 @@
     "academic-writing",
     "research-tools"
   ],
-  "homepage": "https://github.com/ZoeLinUTS/MagicTeX-mcp#readme",
+  "homepage": "https://github.com/Aliutin/TeXChronicle#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ZoeLinUTS/MagicTeX-mcp.git"
+    "url": "git+https://github.com/Aliutin/TeXChronicle.git"
   },
   "bugs": {
-    "url": "https://github.com/ZoeLinUTS/MagicTeX-mcp/issues"
+    "url": "https://github.com/Aliutin/TeXChronicle/issues"
   },
   "engines": {
     "node": ">=20.19.0"
   },
   "bin": {
-    "magictex-mcp": "bin/cli.mjs",
-    "magictex": "bin/cli.mjs"
+    "texchronicle": "bin/cli.mjs"
   },
   "files": [
     "bin/",
@@ -50,15 +49,18 @@
     "docs/",
     ".mcp.json.example",
     "README.md",
+    "NOTICE.md",
     "THIRD_PARTY_NOTICES.md",
     "LICENSE"
   ],
   "scripts": {
-    "start": "tsx src/server.ts",
+    "start": "node --require ./bin/userInfoFallback.cjs --import tsx src/server.ts",
     "typecheck": "tsc --noEmit && tsc -p ui --noEmit",
     "build:ui": "vite build ui",
+    "build:portable:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-portable.ps1",
+    "verify:portable:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-portable.ps1",
     "dev:ui": "vite ui",
-    "test": "node --import tsx --test test/*.test.ts",
+    "test": "node --require ./bin/userInfoFallback.cjs --import tsx --test test/*.test.ts",
     "prepublishOnly": "npm run build:ui"
   },
   "dependencies": {

@@ -79,7 +79,7 @@ npm publish                  # add --otp=<code> if 2FA is on
 **Check:**
 
 ```bash
-npm view magictex-mcp version
+npm view texchronicle version
 ```
 
 ## 3. Publish to the MCP registry
@@ -94,7 +94,7 @@ at the repo root and is gitignored.
 .\mcp-publisher.exe publish
 ```
 
-The `io.github.ZoeLinUTS/*` namespace authenticates against the matching GitHub
+The `io.github.Aliutin/*` namespace authenticates against the matching GitHub
 account. **Log in first.** The token from the previous release will have expired,
 and the failure is not obvious:
 
@@ -111,12 +111,12 @@ a new problem and is actually the confirmation.
 **Check — and read `isLatest`, not the newest timestamp:**
 
 ```powershell
-(Invoke-RestMethod "https://registry.modelcontextprotocol.io/v0/servers?search=magictex&limit=100").servers |
+(Invoke-RestMethod "https://registry.modelcontextprotocol.io/v0/servers?search=texchronicle&limit=100").servers |
   % { [pscustomobject]@{ v = $_.server.version; latest = $_._meta.'io.modelcontextprotocol.registry/official'.isLatest } }
 ```
 
 ```bash
-curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=magictex&limit=100" \
+curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=texchronicle&limit=100" \
   | grep -o '"version":"[^"]*"' | tail -3
 ```
 
@@ -142,11 +142,11 @@ actually install — a clean install from the registry, driven through the real 
 protocol:
 
 ```bash
-npm install --prefix /tmp/verify magictex-mcp@<version>
+npm install --prefix /tmp/verify texchronicle@<version>
 ```
 
 then run `bin/cli.mjs` from that prefix against a scratch project and call
-`render_preview`. Point `MAGICTEX_ASSETS_DIR` at assets you already have so this
+`render_preview`. Point `TEXCHRONICLE_ASSETS_DIR` at assets you already have so this
 does not re-download 480 MB. (Either separator works from 0.1.10 on; before that
 a forward-slash path was refused outright, which is what #84 was.)
 

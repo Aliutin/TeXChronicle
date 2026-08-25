@@ -5,7 +5,7 @@
 **Please don't open a public issue for security problems.**
 
 Use GitHub's private reporting instead:
-[**Report a vulnerability**](https://github.com/ZoeLinUTS/MagicTeX-mcp/security/advisories/new)
+[**Report a vulnerability**](https://github.com/Aliutin/TeXChronicle/security/advisories/new)
 (Security tab → Report a vulnerability). That opens a private thread only you
 and I can see.
 
@@ -14,7 +14,7 @@ hours.
 
 ## What's in scope
 
-MagicTeX runs **entirely on your own machine**. There's no MagicTeX server, no
+TeXChronicle runs **entirely on your own machine**. There's no TeXChronicle cloud server, no
 account, and your paper is never uploaded anywhere. That shapes what counts as
 a vulnerability here:
 

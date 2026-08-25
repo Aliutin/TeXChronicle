@@ -58,7 +58,7 @@ export function Toolbar({
   return (
     <div className="toolbar">
       <img className="brand-mark" src="/app/favicon.svg" alt="" width={22} height={22} />
-      <strong className="brand" title={title ?? undefined}>{title ?? 'MagicTeX'}</strong>
+      <strong className="brand" title={title ?? undefined}>{title ?? 'TeXChronicle'}</strong>
       <button className="recompile on" onClick={() => void recompile()} disabled={compiling || dead}
               title={dead ? 'This window is no longer connected to a server' : 'Compile now'}>
         {compiling ? '⟳ Compiling…' : '⟳ Recompile'}

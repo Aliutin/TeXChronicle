@@ -1,14 +1,14 @@
 {
-  "name": "magictex",
-  "displayName": "MagicTeX",
+  "name": "texchronicle",
+  "displayName": "TeXChronicle",
   "version": "0.1.10",
-  "description": "MagicTeX — a LaTeX editor for AI agents: live PDF preview, PDF comments that drive edits, a Visual (WYSIWYG) mode, and git-tracked history, with slash commands to run it hands-off.",
+  "description": "TeXChronicle — a LaTeX workspace with editable live prose, exact PDF preview, anchored comments, and section-aware Git history.",
   "author": {
-    "name": "ZoeLinUTS",
-    "url": "https://github.com/ZoeLinUTS"
+    "name": "Aliutin",
+    "url": "https://github.com/Aliutin"
   },
-  "homepage": "https://github.com/ZoeLinUTS/MagicTeX-mcp",
-  "repository": "https://github.com/ZoeLinUTS/MagicTeX-mcp",
+  "homepage": "https://github.com/Aliutin/TeXChronicle",
+  "repository": "https://github.com/Aliutin/TeXChronicle",
   "license": "AGPL-3.0-or-later",
   "keywords": [
     "latex",
@@ -18,11 +18,11 @@
     "mcp"
   ],
   "mcpServers": {
-    "magictex": {
+    "texchronicle": {
       "command": "npx",
       "args": [
         "-y",
-        "magictex-mcp"
+        "texchronicle"
       ]
     }
   }

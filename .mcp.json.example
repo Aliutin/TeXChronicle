@@ -1,8 +1,8 @@
 {
   "mcpServers": {
-    "magictex": {
+    "texchronicle": {
       "command": "npx",
-      "args": ["-y", "magictex-mcp"]
+      "args": ["-y", "texchronicle"]
     }
   }
 }

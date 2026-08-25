@@ -1,7 +1,0 @@
-# Enables the "Sponsor" button on the GitHub repo.
-# Set up GitHub Sponsors at https://github.com/sponsors to activate it.
-github: [ZoeLinUTS]
-# Add others if you use them, e.g.:
-# ko_fi: your-handle
-# open_collective: your-project
-# custom: ["https://your-donate-link"]

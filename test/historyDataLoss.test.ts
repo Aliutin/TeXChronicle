@@ -29,7 +29,7 @@ function legacyCheckpoint(root: string): string {
 }
 
 function project() {
-  const root = mkdtempSync(join(tmpdir(), 'magictex-hist-'));
+  const root = mkdtempSync(join(tmpdir(), 'texchronicle-hist-'));
   const git = (...a: string[]) => execFileSync('git', a, { cwd: root, stdio: 'pipe' });
   git('init', '-q');
   git('config', 'user.email', 't@example.com');
@@ -112,7 +112,7 @@ test('restore refuses when it could not snapshot the current state first', async
 
   const original = process.env.GIT_INDEX_FILE;
   // A directory that cannot hold the temp index makes write-tree fail.
-  process.env.MAGICTEX_TMP_FAIL = '1';
+  process.env.TEXCHRONICLE_TMP_FAIL = '1';
   try {
     // Without a way to force the failure from outside, assert the contract
     // instead: a successful restore must have produced a snapshot to return to.
@@ -127,7 +127,7 @@ test('restore refuses when it could not snapshot the current state first', async
     assert.match(readFileSync(join(root, 'main.tex'), 'utf8'), /PRECIOUS UNSAVED WORK/,
       'the pre-restore snapshot does not contain what was overwritten');
   } finally {
-    delete process.env.MAGICTEX_TMP_FAIL;
+    delete process.env.TEXCHRONICLE_TMP_FAIL;
     if (original === undefined) delete process.env.GIT_INDEX_FILE; else process.env.GIT_INDEX_FILE = original;
   }
 });

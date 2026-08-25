@@ -5,7 +5,7 @@
 //   resolved  — done, with the author's note.
 // Clicking a card jumps to its highlight in the PDF.
 import { useEffect, useState } from 'react';
-import { patchComment, removeComment, replyComment, type Comment } from '../api';
+import { patchComment, removeComment, replyComment, type Comment, type Status } from '../api';
 
 function ReplyBox({ id }: { id: string }) {
   const [text, setText] = useState('');
@@ -19,13 +19,16 @@ function ReplyBox({ id }: { id: string }) {
 }
 
 export function CommentsPanel({
-  comments, selectedId, onJump,
+  comments, selectedId, onJump, liveStatus, pdfCheckpoint,
 }: {
   comments: Comment[];
   selectedId: string | null;
   onJump: (c: Comment) => void;
+  liveStatus: Status;
+  pdfCheckpoint?: string;
 }) {
   const [auto, setAuto] = useState(() => localStorage.getItem('ws-auto-accept') === '1');
+  const [actionError, setActionError] = useState('');
   useEffect(() => { localStorage.setItem('ws-auto-accept', auto ? '1' : '0'); }, [auto]);
 
   const suggested = comments.filter((c) => c.status === 'suggested');
@@ -35,10 +38,15 @@ export function CommentsPanel({
   // Copilot mode: as reviewer suggestions arrive, accept them automatically.
   useEffect(() => {
     if (!auto) return;
-    for (const c of suggested) void patchComment(c.id, { status: 'accepted' });
-  }, [auto, suggested]);
+    for (const c of suggested) void patchComment(c.id, { status: 'accepted' }).catch((error) => {
+      setActionError(String((error as Error).message ?? error));
+    });
+  }, [auto, comments]);
 
-  const accept = (c: Comment) => void patchComment(c.id, { status: 'accepted' });
+  const run = (operation: Promise<void>) => void operation.then(() => setActionError('')).catch((error) => {
+    setActionError(String((error as Error).message ?? error));
+  });
+  const accept = (c: Comment) => run(patchComment(c.id, { status: 'accepted' }));
   const reject = (c: Comment) => void removeComment(c.id);
   const short = (sha?: string) => sha?.slice(0, 8);
 
@@ -53,11 +61,12 @@ export function CommentsPanel({
         <div key={i} className="reply"><span className={`role-badge role-${r.by}`}>{r.by}</span>{r.text}</div>
       ))}
       {c.status === 'resolved' && c.resolvedNote && <div className="comment-note">✓ {c.resolvedNote}</div>}
-      {(c.createdCheckpoint || c.resolvedCheckpoint) && (
+      {(c.createdCheckpoint || c.resolvedCheckpoint || c.verifiedCheckpoint) && (
         <div className="comment-version">
           {c.createdCheckpoint && <>created at {short(c.createdCheckpoint)}</>}
           {c.createdCheckpoint && c.resolvedCheckpoint && <> · </>}
           {c.resolvedCheckpoint && <>resolved at {short(c.resolvedCheckpoint)}</>}
+          {c.verifiedCheckpoint && <>{(c.createdCheckpoint || c.resolvedCheckpoint) && <> · </>}verified at {short(c.verifiedCheckpoint)}</>}
         </div>
       )}
       {c.restoreReview && (
@@ -72,12 +81,17 @@ export function CommentsPanel({
           <button className="ghost" onClick={() => reject(c)}>Reject</button>
         </>}
         {c.status === 'accepted' && <>
-          <button className="ghost" onClick={() => void patchComment(c.id, { status: 'resolved' })}>resolve</button>
+          <button className="ghost" onClick={() => run(patchComment(c.id, { status: 'resolved' }))}>resolve</button>
           <button className="ghost" onClick={() => void removeComment(c.id)}>delete</button>
         </>}
         {c.status === 'resolved' && <>
-          {c.restoreReview && <button className="ghost" onClick={() => void patchComment(c.id, { restoreReview: null })}>verified</button>}
-          <button className="ghost" onClick={() => void patchComment(c.id, { status: 'accepted' })}>reopen</button>
+          {c.restoreReview && <button
+            className="ghost"
+            disabled={liveStatus !== 'ok' || !pdfCheckpoint}
+            title={liveStatus === 'ok' && pdfCheckpoint ? 'Record verification on this rendered checkpoint' : 'Wait for a successful recompile before verifying'}
+            onClick={() => run(patchComment(c.id, { restoreReview: null }))}
+          >verified</button>}
+          <button className="ghost" onClick={() => run(patchComment(c.id, { status: 'accepted' }))}>reopen</button>
           <button className="ghost" onClick={() => void removeComment(c.id)}>close</button>
         </>}
       </div>
@@ -86,6 +100,7 @@ export function CommentsPanel({
 
   return (
     <div className="comments">
+      {actionError && <div className="comment-action-error" role="alert">{actionError}</div>}
       <label className="auto-accept" title="Copilot: automatically accept reviewer suggestions so the loop resolves them without a manual gate">
         <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
         Auto-accept reviewer suggestions (copilot)

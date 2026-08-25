@@ -38,7 +38,7 @@ const doc = (body) => [
   '',
 ].join('\n');
 
-const proj = mkdtempSync(join(tmpdir(), 'magictex-errors-'));
+const proj = mkdtempSync(join(tmpdir(), 'texchronicle-errors-'));
 const tex = join(proj, 'main.tex');
 writeFileSync(tex, doc('Second page.'));
 
@@ -78,7 +78,7 @@ const restored = await render('3 restored');
 
 // A package the bundled TeX Live doesn't have, that this document never uses:
 // a stale \usepackage must not cost the author their compile.
-writeFileSync(tex, doc('Second page.').replace(String.raw`\usepackage{amsmath}`, String.raw`\usepackage{amsmath}` + '\n' + String.raw`\usepackage{magictexnosuchpkg}`));
+writeFileSync(tex, doc('Second page.').replace(String.raw`\usepackage{amsmath}`, String.raw`\usepackage{amsmath}` + '\n' + String.raw`\usepackage{texchroniclenosuchpkg}`));
 const stubbed = await render('4 unused missing package');
 
 // A vendored document class. IEEEtran is in no tier of the bundled TeX Live, so

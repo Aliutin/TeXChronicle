@@ -9,14 +9,23 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { createCheckpoint } from '../src/git/checkpoints.js';
 
-const server = fileURLToPath(new URL('../src/server.ts', import.meta.url));
+const server = fileURLToPath(new URL('../bin/cli.mjs', import.meta.url));
+const inheritedEnv = Object.fromEntries(
+  Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+);
 
 test('review workflow over MCP: post → gate → located → thread → resolve', { timeout: 90_000 }, async () => {
   const proj = mkdtempSync(join(tmpdir(), 'e2e-'));
   writeFileSync(join(proj, 'main.tex'),
     '\\documentclass{article}\n\\begin{document}\nWe report a large speedup on the benchmark today.\n\\end{document}\n');
-  const transport = new StdioClientTransport({ command: 'npx', args: ['tsx', server], cwd: proj });
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [server],
+    cwd: proj,
+    env: inheritedEnv,
+  });
   const client = new Client({ name: 'ci', version: '0' }, { capabilities: {} });
   await client.connect(transport);
   const call = async (name: string, args: Record<string, unknown> = {}) =>
@@ -46,8 +55,18 @@ test('review workflow over MCP: post → gate → located → thread → resolve
     ck = await call('check_comments');
     assert.match(ck, /author: averaged over 5 runs/);
 
-    // Resolve clears it.
-    await call('resolve_comment', { id, note: 'added the baseline + runs' });
+    // A resolution cannot claim provenance until a successful-render checkpoint
+    // exists. The helper below simulates that completed render without starting
+    // Chromium/WASM, which this comment-workflow test deliberately avoids.
+    const blocked = await call('resolve_comment', { id, note: 'added the baseline + runs' });
+    assert.match(blocked, /not the latest successful checkpoint/);
+    ck = await call('check_comments');
+    assert.match(ck, /1 accepted comment/);
+
+    const checkpoint = await createCheckpoint(proj);
+    assert.ok(checkpoint.sha, checkpoint.error ?? 'expected a successful-render checkpoint');
+    const resolved = await call('resolve_comment', { id, note: 'added the baseline + runs' });
+    assert.match(resolved, /Resolved comment/);
     ck = await call('check_comments');
     assert.match(ck, /No accepted comments/);
   } finally {

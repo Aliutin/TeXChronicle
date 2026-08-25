@@ -52,7 +52,7 @@ function PdfFirstPage({ url, name }: { url: string; name: string }) {
       if (!cancelled) setState('ready');
     })().catch((error) => {
       if (!cancelled) {
-        console.warn(`[MagicTeX] could not render figure asset ${name}`, error);
+        console.warn(`[TeXChronicle] could not render figure asset ${name}`, error);
         setState('error');
       }
     });
@@ -66,7 +66,7 @@ function PdfFirstPage({ url, name }: { url: string; name: string }) {
   return (
     <div className={`asset-pdf-thumb asset-${state}`}>
       {state === 'loading' && <span>Opening PDF figure…</span>}
-      {state === 'error' && <span>PDF missing or outside the project root</span>}
+      {state === 'error' && <span>PDF not found using this TeX project's figure paths</span>}
       <canvas ref={canvasRef} aria-label={`First page of ${name}`} />
     </div>
   );
@@ -134,13 +134,13 @@ export function AssetPreview({ selection, refreshKey, onClose }: {
           reloadTick={refreshKey}
           pdfUrl={url}
           comments={[]}
-          missingMessage="This PDF is missing or outside the selected project and its enclosing Git repository."
+          missingMessage="This PDF could not be found using the figure paths declared by this TeX project."
         />
       ) : showImage ? (
         <div className="asset-image-scroll">
           {!imageError
             ? <img src={url} alt={name} onError={() => hasKnownExtension ? setImageError(true) : setExtensionlessPdf(true)} />
-            : <div className="asset-preview-error"><strong>Could not preview {name}</strong><span>The file may be missing or outside the selected project root.</span></div>}
+            : <div className="asset-preview-error"><strong>Could not preview {name}</strong><span>The file was not found using this TeX project's figure paths.</span></div>}
         </div>
       ) : (
         <div className="asset-preview-error">
